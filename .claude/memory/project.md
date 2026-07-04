@@ -123,10 +123,18 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   cap; `queen/` package (`bookkeeping.py` ref-mapping SQLite, `telegram_sink.py`
   QueenSink, `router.py` QueenRouter); interim single-process `app.py` wiring queen
   +worker over the in-memory transport (`build_worker_and_router`, `parse_spawn`,
-  owner-gated `/spawn`/`/ls`/`/kill`/`/panic`). 69 tests pass. **Next step: write +
-  execute Plan 2** (real WebSocket transport, split `skep-queen`/`skepd`
-  entrypoints, mutual auth, mDNS, heartbeat/presence, queen auto-onboarding,
-  containerized-queen deploy). Two execution gotchas for Plan 2: (a) the plan
+  owner-gated `/spawn`/`/ls`/`/kill`/`/panic`). 69 tests pass. **Plan 2 WRITTEN
+  2026-07-05** (`plans/2026-07-05-skep-phase2-plan2-websocket-transport.md`, 12
+  TDD tasks: config net/auth fields → `wire.py` codec → `auth.py` HMAC handshake →
+  queen WS server + `RemoteWorker` + `on_spawn_rejected` → worker WS client +
+  `WsEventSink` + `SwitchableEventSink` → heartbeat/presence/detached-`/ls` →
+  reconnect/backoff + idempotent topic re-attach → `discovery.py` mDNS →
+  `skep-queen` entrypoint → `skepd` entrypoint → queen group auto-onboarding →
+  two-worker WS e2e + auth-reject). Deps added: `aiohttp`, `zeroconf`. **Deviation
+  from design §15:** `telegram_gw.py`/`formatting.py` stay at `src/skep/` (NOT moved
+  into `queen/`) to dodge gotcha (b) below. Containerized-queen/Caddy VPS wiring is
+  explicitly OUT of scope (lives in `~/gh/vps`). **Next step: EXECUTE Plan 2.**
+  Two execution gotchas for Plan 2: (a) the plan
   predated this repo's pyright governance, so plan-faithful rewrites regressed
   `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
   mirror the `_task()` assert-helper + `Callable[...]` factory annotations idiom;
@@ -256,10 +264,10 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     in-memory seam ships; see the Plan-1-executed bullet)** — plus Plan 2 (real WS)
     for anything past in-memory tests, plus an UNRESOLVED spike (the worker-local
     MCP shim + agent↔`ref` binding, spec §15). **Build order: Phase 2 Plan 1 (the
-    seam) — DONE; NEXT write + execute Plan 2, then resolve the shim spike as L0's
-    first task, then build L0.** The mailbox brainstorm ran ahead of the build
-    sequence — that's fine, the design is banked; the next EXECUTABLE step is now
-    Phase 2 Plan 2.
+    seam) — DONE; Plan 2 WRITTEN 2026-07-05 (NEXT: execute it), then resolve the
+    shim spike as L0's first task, then build L0.** The mailbox brainstorm ran ahead
+    of the build sequence — that's fine, the design is banked; the next EXECUTABLE
+    step is now executing Phase 2 Plan 2.
 
 - **Usage-limit handling = PARK & RESUME (recorded 2026-07-05).** The `claude` CLI
   has NO native pause/resume: on a Pro/Max plan usage-limit hit it "blocks further
