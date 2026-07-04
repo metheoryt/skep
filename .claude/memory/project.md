@@ -216,7 +216,15 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   - **FIRST SPEC = L0 Mailbox** (foundation everything needs; extends the existing
     `EventSink`/`CommandSource` WS seam; forces solving addressing+delivery+
     loop-prevention, the exact gap the agent-comms survey flagged as unsolved).
-    Being designed now (brainstorm 2026-07-05).
+    **DESIGNED — spec committed `docs/superpowers/specs/2026-07-05-l0-mailbox-design.md`
+    (2026-07-05).** But L0 is BLOCKED on unbuilt foundations: it rides the Phase-2
+    Plan-1 transport seam (`EventSink`/`CommandSource`) — plan written, NOT executed —
+    plus Plan 2 (real WS) for anything past in-memory tests, plus an UNRESOLVED
+    spike (the worker-local MCP shim + agent↔`ref` binding, spec §15). **Build
+    order: execute Phase 2 Plan 1 (the seam) FIRST, then Plan 2, then resolve the
+    shim spike as L0's first task, then build L0.** The mailbox brainstorm ran ahead
+    of the build sequence — that's fine, the design is banked; the next EXECUTABLE
+    step is Phase 2 Plan 1.
 
 - **Usage-limit handling = PARK & RESUME (recorded 2026-07-05).** The `claude` CLI
   has NO native pause/resume: on a Pro/Max plan usage-limit hit it "blocks further
