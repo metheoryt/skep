@@ -218,6 +218,22 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     loop-prevention, the exact gap the agent-comms survey flagged as unsolved).
     Being designed now (brainstorm 2026-07-05).
 
+- **Usage-limit handling = PARK & RESUME (recorded 2026-07-05).** The `claude` CLI
+  has NO native pause/resume: on a Pro/Max plan usage-limit hit it "blocks further
+  requests until the reset time" and the process terminates (confirmed via docs
+  errors.md/headless.md). fleetd must build: Supervisor detects the limit event in
+  the agent's stream, parses the reset time from the message ("…resets 3:45pm" /
+  weekly), marks the task `parked-until <reset>` (NOT failed); queen notifies the
+  CEO in Telegram. **Auto-resume via `--resume <session_id>` DOES work in headless
+  `-p` mode → P4 (resume-after-restart)**; session-id lookup is scoped to the
+  working dir + its worktrees, so the resume re-spawn MUST reuse the SAME worktree
+  (fits fleetd's worktree model). **VERIFY EMPIRICALLY before building detection**
+  (undocumented, mirror the stdin-gotcha verify style): exact stream-json event
+  shape + exit code on a limit hit. Distinct from context-window-full, which the
+  CLI handles itself via compaction (no fleetd action). Profile plan limits are
+  INDEPENDENT (owner-confirmed) but route-around-exhaustion is MOSTLY N/A — see the
+  profile↔repo binding constraint below.
+
 ## Gotchas
 
 - **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
@@ -253,3 +269,12 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   soft-steer, gated-ops approval → Phase 3; sandbox, resume-after-restart,
   worktree cleanup → Phase 4. **Shared vector memory (queen-hosted blackboard) →
   its own later phase, after P2/P3** (decided 2026-07-05; see Decisions).
+- **Profile↔repo binding (owner-confirmed 2026-07-05): the work profile
+  (`~/.claude-work`) operates ONLY on work-related repos; personal (`~/.claude`) on
+  personal repos.** A task's repo dictates its eligible profile — profiles are NOT
+  interchangeable labor pools. Plan usage limits are INDEPENDENT per profile
+  (separate OAuth accounts), but you generally CANNOT dodge a rate-limited profile
+  by rerouting its work, because the eligible profile is fixed by the repo:
+  work-repo + work-profile-exhausted ⇒ PARK (no personal fallback). The L4
+  "route around the exhausted division" idea only applies if a task is ever
+  profile-agnostic or a class ever has >1 account — not the case today.
