@@ -14,6 +14,8 @@ class QueenSink:
 
     async def on_task_started(self, host: str, profile: str, local_id: int,
                               repo: str, title: str) -> None:
+        if self._bk.by_worker_task(host, profile, local_id) is not None:
+            return  # re-attach: worker re-registered an already-known task
         topic_id = await self._gw.create_topic(f"{host}·{profile}·{repo}")
         self._bk.add(host, profile, local_id, repo, title, topic_id)
 

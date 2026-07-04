@@ -10,7 +10,7 @@ from skep.config import WorkerConfig
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.router import QueenRouter
 from skep.transport import SwitchableEventSink
-from skep.ws_transport import QueenWsServer, WorkerWsClient
+from skep.ws_transport import QueenWsServer, WorkerWsClient, WsEventSink
 
 
 class RecordingInbox:
@@ -277,3 +277,51 @@ async def test_worker_sends_heartbeat():
     finally:
         await server.close()
     assert seen["beat"]
+
+
+async def test_worker_reconnects_after_drop():
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor()
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s")
+
+    connects = {"n": 0}
+    orig = client.run_once
+
+    async def counting_run_once(session, u):
+        connects["n"] += 1
+        if connects["n"] == 1:
+            raise ConnectionError("simulated drop")
+        await orig(session, u)
+
+    client.run_once = counting_run_once  # type: ignore[method-assign]
+    try:
+        task = asyncio.create_task(client.run(max_backoff=0.1))
+        for _ in range(200):
+            if connects["n"] >= 2:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+    finally:
+        await server.close()
+    assert connects["n"] >= 2  # dropped once, reconnected
+
+
+class DyingWs:
+    """Stands in for a ws whose send raises once the socket is dying —
+    exercises WsEventSink's send guard without a real network drop."""
+
+    async def send_str(self, data):
+        raise ConnectionResetError("socket is dying")
+
+
+async def test_ws_event_sink_swallows_send_error_on_dying_socket():
+    sink = WsEventSink(DyingWs())  # type: ignore[arg-type]
+    # None of these must raise — a dying socket must not propagate into
+    # Supervisor.run_events and mark a still-running agent's task failed.
+    await sink.task_started(1, "nix", "clean")
+    await sink.activity(1, "still going")
+    await sink.milestone(1, "checkpoint")
+    await sink.done(1, "done", "ok")

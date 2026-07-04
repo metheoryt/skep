@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -118,22 +119,35 @@ class QueenWsServer:
 
 
 class WsEventSink:
-    """EventSink that serialises each domain event to a JSON frame."""
+    """EventSink that serialises each domain event to a JSON frame.
+
+    Sends are guarded: a dying socket must never propagate into the
+    Supervisor's event loop and mark a still-running agent's task as
+    failed (design §6.4 — agents keep running, only reporting pauses).
+    The receive-loop's own drop detection (run_once's finally clearing
+    switch.target) is what handles cleanup, not an exception from here.
+    """
 
     def __init__(self, ws: aiohttp.ClientWebSocketResponse):
         self._ws = ws
 
+    async def _send(self, msg: dict[str, Any]) -> None:
+        try:
+            await self._ws.send_str(wire.encode(msg))
+        except (aiohttp.ClientError, ConnectionError, RuntimeError) as exc:
+            logger.warning("dropped event send on dying socket: %r", exc)
+
     async def task_started(self, local_id: int, repo: str, title: str) -> None:
-        await self._ws.send_str(wire.encode(wire.task_started_msg(local_id, repo, title)))
+        await self._send(wire.task_started_msg(local_id, repo, title))
 
     async def activity(self, local_id: int, line: str) -> None:
-        await self._ws.send_str(wire.encode(wire.activity_msg(local_id, line)))
+        await self._send(wire.activity_msg(local_id, line))
 
     async def milestone(self, local_id: int, text: str) -> None:
-        await self._ws.send_str(wire.encode(wire.milestone_msg(local_id, text)))
+        await self._send(wire.milestone_msg(local_id, text))
 
     async def done(self, local_id: int, status: str, summary: str) -> None:
-        await self._ws.send_str(wire.encode(wire.done_msg(local_id, status, summary)))
+        await self._send(wire.done_msg(local_id, status, summary))
 
 
 class WorkerWsClient:
@@ -185,10 +199,31 @@ class WorkerWsClient:
                 async for msg in ws:
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         continue
-                    await self._on_command(ws, wire.decode(msg.data))
+                    try:
+                        await self._on_command(ws, wire.decode(msg.data))
+                    except Exception:
+                        logger.exception(
+                            "error handling command from queen: %r", msg.data)
             finally:
                 hb.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await hb
                 self._switch.target = None
+
+    async def run(self, *, max_backoff: float = 30.0, _once: bool = False) -> None:
+        backoff = 0.5
+        while True:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = self._cfg.queen_url or ""
+                    await self.run_once(session, url)
+                backoff = 0.5  # clean close -> reset
+            except (aiohttp.ClientError, ConnectionError, AuthError, OSError):
+                pass
+            if _once:
+                return
+            await asyncio.sleep(backoff)
+            backoff = min(max_backoff, backoff * 2)
 
     async def _on_command(self, ws: aiohttp.ClientWebSocketResponse,
                           msg: dict[str, Any]) -> None:
