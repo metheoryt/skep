@@ -7,6 +7,7 @@ dependencies = ["aiogram>=3.13", "aiohttp>=3.10", "zeroconf>=0.130"]
 
 [project.scripts]
 skep = "skep.app:run"
+skep-queen = "skep.queen.app:run"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]
