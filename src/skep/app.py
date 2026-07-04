@@ -9,14 +9,14 @@ from aiogram import Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, TelegramObject
 
-from fleetd.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
-from fleetd.db import Registry
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.router import QueenRouter, UnknownWorker
-from fleetd.queen.telegram_sink import QueenSink
-from fleetd.supervisor import CapacityError, Supervisor
-from fleetd.telegram_gw import Gateway, build_bot, is_owner
-from fleetd.transport import InMemoryEventSink
+from skep.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
+from skep.db import Registry
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.router import QueenRouter, UnknownWorker
+from skep.queen.telegram_sink import QueenSink
+from skep.supervisor import CapacityError, Supervisor
+from skep.telegram_gw import Gateway, build_bot, is_owner
+from skep.transport import InMemoryEventSink
 
 
 def parse_spawn(args: str) -> tuple[str, str, str, str] | None:

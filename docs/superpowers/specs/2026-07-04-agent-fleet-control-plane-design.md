@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-04
 **Status:** Approved design, pre-implementation
-**Repo:** `fleetd` (this repo) — cross-platform daemon. Deployed on NixOS via the
+**Repo:** `skep` (this repo) — cross-platform daemon. Deployed on NixOS via the
 `~/gh/nix` flake; installed on Windows via its own service wrapper.
 
 ## 1. Purpose
@@ -10,18 +10,18 @@
 A control plane for driving headless Claude Code agents from Telegram. Dispatch
 a task to a repo from your phone, watch it work live, talk to it, steer or kill
 it — all through a Telegram bot backed by a per-machine supervisor daemon
-(`fleetd`).
+(`skep`).
 
 The value proposition: headless Claude Code inherits your *existing* machine
 setup (skills, gortex MCP, hooks, per-profile settings, credentials, real repos
-and toolchains), so `fleetd` never re-implements the agent. It spawns, pipes,
+and toolchains), so `skep` never re-implements the agent. It spawns, pipes,
 formats, and routes.
 
 ### Non-goals (this version)
 
 - **Cross-agent communication.** v1: you are the hub; all messages flow through
   you. No agent→agent bus. (Deferred.)
-- **Cross-machine fleet.** One `fleetd` per machine, each managing that
+- **Cross-machine fleet.** One `skep` per machine, each managing that
   machine's agents. Unifying multiple machines under one bot is deferred
   (`getUpdates` is single-consumer; needs one-bot-per-machine or a central
   poller).
@@ -37,14 +37,14 @@ formats, and routes.
 | Isolation | Per-task `native` \| `sandbox` (container) | Trusted tasks run on host; sensitive ones confined |
 | Topic model | Topic-per-task, deleted on completion | Clean; no pile-up (`deleteForumTopic`) |
 | Streaming UI | Live-edited "current activity" message | Avoids message spam |
-| Daemon location | Dedicated cross-platform repo (`fleetd`) | NixOS flake can't deploy to Windows; distinct product |
+| Daemon location | Dedicated cross-platform repo (`skep`) | NixOS flake can't deploy to Windows; distinct product |
 | Packaging | Native process (systemd user unit / Windows service). **Not** Docker Compose | Containerizing agents fights environment reuse; Nix already gives reproducibility |
 
 ## 3. Architecture
 
 ### 3.1 Components
 
-**1. `fleetd` — supervisor daemon.** Python + asyncio + SQLite. One instance per
+**1. `skep` — supervisor daemon.** Python + asyncio + SQLite. One instance per
 machine, long-running.
 - **Registry (SQLite):** each task = `{id, repo, worktree_path, session_id, pid,
   topic_id, mode, status, created_at}`. Survives daemon restart → sessions
@@ -77,7 +77,7 @@ machine, long-running.
   `AskUserQuestion`; this is the human-in-the-loop primitive.)
 - `notify_human(msg)` — fire-and-forget status ping.
 - Backs the `--permission-prompt-tool` for gated-ops approval (see §4.2).
-- `Notification` and `Stop` hooks POST lifecycle events to `fleetd`.
+- `Notification` and `Stop` hooks POST lifecycle events to `skep`.
 
 **4. Formatting layer.** stream-json → Telegram MarkdownV2. Assistant text
 streams into the live activity message; tool calls render compactly
@@ -87,14 +87,14 @@ streams into the live activity message; tool calls render compactly
 
 ```
 you    →  #control: /spawn nix "clean up nvidia power mgmt"
-fleetd →  git worktree add …  ·  create topic "nix · nvidia"  ·  spawn claude -p
-agent  →  stream-json events   →  fleetd formats  →  live message in topic
+skep →  git worktree add …  ·  create topic "nix · nvidia"  ·  spawn claude -p
+agent  →  stream-json events   →  skep formats  →  live message in topic
 agent  →  ask_human("keep fine-grained PM?")  →  posts to topic, blocks
-you    →  reply in topic  →  fleetd → tool_result → agent continues
+you    →  reply in topic  →  skep → tool_result → agent continues
 agent  →  wants: git push --force  →  PreToolUse classifier: irreversible
-       →  fleetd posts [approve][deny], blocks
+       →  skep posts [approve][deny], blocks
 you    →  [approve]  →  agent proceeds
-agent  →  Stop hook  →  fleetd posts summary + [kill][close] buttons
+agent  →  Stop hook  →  skep posts summary + [kill][close] buttons
 you    →  [close]    →  deleteForumTopic, mark done
 ```
 
@@ -107,7 +107,7 @@ foothold with full privileges. This section is first-class, not an afterthought.
 
 ### 4.1 Authentication
 
-- **Hard allowlist on the Telegram user ID.** `fleetd` ignores every update whose
+- **Hard allowlist on the Telegram user ID.** `skep` ignores every update whose
   sender is not the owner. No open commands, ever.
 - **Bot token in OS secret storage**, never committed. (Mirrors the pattern of
   keeping the work Sentry secret in per-repo `.claude/settings.local.json`, out
@@ -136,7 +136,7 @@ Implemented via `--permission-prompt-tool` (→ `human-loop`) backed by a
 ## 5. Interrupt model (honest constraints)
 
 True instant mid-tool interrupt of a headless CLI is limited. Two real levers:
-- **Soft steer** — reply in a topic → `fleetd` writes a user message into the
+- **Soft steer** — reply in a topic → `skep` writes a user message into the
   running session's stdin; lands at the next turn/tool boundary.
 - **Hard stop** — `[kill]` button / `/kill` → SIGTERM the process; session is
   resumable via `--resume` with a correction.
@@ -149,7 +149,7 @@ True instant mid-tool interrupt of a headless CLI is limited. Two real levers:
 - **Persistence:** SQLite.
 - **Packaging/deploy:**
   - Core: pure Python, no OS assumptions.
-  - NixOS: `~/gh/nix` consumes this repo as a flake input; `modules/home/fleetd.nix`
+  - NixOS: `~/gh/nix` consumes this repo as a flake input; `modules/home/skep.nix`
     runs it as a **systemd user service** on g16 + latitude5520.
   - Windows: installed from this repo via its own service wrapper (Scheduled Task
     / `nssm`), mirroring the existing `git-autofetch` split.
@@ -159,12 +159,12 @@ True instant mid-tool interrupt of a headless CLI is limited. Two real levers:
 ## 7. Phasing
 
 **Phase 1 — Monitor + lifecycle + auth.**
-`fleetd` core, spawn/`ls`/kill, per-task topics, stream-json → live-edited
+`skep` core, spawn/`ls`/kill, per-task topics, stream-json → live-edited
 formatting, Telegram user-ID lock, audit log, `/panic`. Native mode only.
 *Outcome:* dispatch from `#control`, watch live, kill. Useful on day one.
 
 **Phase 2 — Queen + isolated workers.** *(Re-scoped 2026-07-04 — see
-`2026-07-04-fleetd-phase2-queen-workers-design.md`.)* Split the Phase-1 single
+`2026-07-04-skep-phase2-queen-workers-design.md`.)* Split the Phase-1 single
 process into a Telegram-owning **queen** and one or more **workers**; multi-host,
 mDNS + public-link + WG discovery, per-worker Claude-profile isolation, capacity
 cap. The original "talk-back + brakes" scope moved to Phase 3.

@@ -5,7 +5,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 
-from fleetd.config import QueenConfig
+from skep.config import QueenConfig
 
 
 def is_owner(user_id: int | None, owner_id: int) -> bool:

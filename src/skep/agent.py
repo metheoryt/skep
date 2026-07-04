@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 from typing import AsyncIterator
 
-from fleetd.stream import Event, parse_event
+from skep.stream import Event, parse_event
 
 
 def _agent_env(config_dir: str | None) -> dict[str, str]:

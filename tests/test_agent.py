@@ -1,7 +1,7 @@
 import pytest
 
-from fleetd.agent import AgentProcess, _agent_env, create_worktree
-from fleetd.stream import Event
+from skep.agent import AgentProcess, _agent_env, create_worktree
+from skep.stream import Event
 
 
 def test_agent_env_injects_config_dir(monkeypatch):
@@ -19,7 +19,7 @@ def test_agent_env_none_leaves_config_dir_unset(monkeypatch):
 
 def test_create_worktree_makes_a_new_branch(git_repo, tmp_path):
     wt = tmp_path / "wt"
-    create_worktree(git_repo, wt, "fleetd/task-1")
+    create_worktree(git_repo, wt, "skep/task-1")
     assert (wt / "README.md").exists()
     assert (wt / ".git").exists()
 

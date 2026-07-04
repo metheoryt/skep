@@ -1,4 +1,4 @@
-# fleetd
+# skep
 
 Per-machine supervisor daemon that dispatches headless Claude Code agents from
 Telegram. See `docs/superpowers/specs/` for the design.
@@ -12,15 +12,15 @@ Telegram. See `docs/superpowers/specs/` for the design.
 4. Export config (never commit these):
 
    ```sh
-   export FLEETD_BOT_TOKEN=...        # from BotFather
-   export FLEETD_OWNER_ID=123456789   # your user ID; only you may command the bot
-   export FLEETD_GROUP_CHAT_ID=-100...# the supergroup chat ID
-   export FLEETD_REPOS_ROOT=$HOME/gh  # where your repos live
-   export FLEETD_WORKTREES_ROOT=$HOME/.fleetd/worktrees
-   # optional: FLEETD_CLAUDE_BIN=claude
+   export SKEP_BOT_TOKEN=...        # from BotFather
+   export SKEP_OWNER_ID=123456789   # your user ID; only you may command the bot
+   export SKEP_GROUP_CHAT_ID=-100...# the supergroup chat ID
+   export SKEP_REPOS_ROOT=$HOME/gh  # where your repos live
+   export SKEP_WORKTREES_ROOT=$HOME/.skep/worktrees
+   # optional: SKEP_CLAUDE_BIN=claude
    ```
 
-5. `uv run fleetd`
+5. `uv run skep`
 
 ## Develop
 

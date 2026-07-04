@@ -2,25 +2,25 @@ from pathlib import Path
 
 import pytest
 
-from fleetd.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
+from skep.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
 
 
 def _worker_env():
     return {
-        "FLEETD_HOST": "g16",
-        "FLEETD_PROFILE": "work",
-        "FLEETD_CLAUDE_CONFIG_DIR": "/home/me/.claude-work",
-        "FLEETD_REPOS_ROOT": "/home/me/gh",
-        "FLEETD_WORKTREES_ROOT": "/home/me/.fleetd/wt",
-        "FLEETD_DB": "/home/me/.fleetd/work.sqlite",
+        "SKEP_HOST": "g16",
+        "SKEP_PROFILE": "work",
+        "SKEP_CLAUDE_CONFIG_DIR": "/home/me/.claude-work",
+        "SKEP_REPOS_ROOT": "/home/me/gh",
+        "SKEP_WORKTREES_ROOT": "/home/me/.skep/wt",
+        "SKEP_DB": "/home/me/.skep/work.sqlite",
     }
 
 
 def _queen_env():
     return {
-        "FLEETD_BOT_TOKEN": "tok",
-        "FLEETD_OWNER_ID": "42",
-        "FLEETD_GROUP_CHAT_ID": "-1001",
+        "SKEP_BOT_TOKEN": "tok",
+        "SKEP_OWNER_ID": "42",
+        "SKEP_GROUP_CHAT_ID": "-1001",
     }
 
 
@@ -31,8 +31,8 @@ def test_load_worker_config_parses_fields():
         profile="work",
         claude_config_dir="/home/me/.claude-work",
         repos_root=Path("/home/me/gh"),
-        worktrees_root=Path("/home/me/.fleetd/wt"),
-        db_path="/home/me/.fleetd/work.sqlite",
+        worktrees_root=Path("/home/me/.skep/wt"),
+        db_path="/home/me/.skep/work.sqlite",
         max_concurrent=8,
         claude_bin="claude",
     )
@@ -43,24 +43,24 @@ def test_worker_host_defaults_to_hostname(monkeypatch):
 
     monkeypatch.setattr(socket, "gethostname", lambda: "boxy")
     env = _worker_env()
-    del env["FLEETD_HOST"]
+    del env["SKEP_HOST"]
     assert load_worker_config(env).host == "boxy"
 
 
 def test_worker_profile_defaults_to_default():
     env = _worker_env()
-    del env["FLEETD_PROFILE"]
+    del env["SKEP_PROFILE"]
     assert load_worker_config(env).profile == "default"
 
 
 def test_worker_claude_config_dir_optional():
     env = _worker_env()
-    del env["FLEETD_CLAUDE_CONFIG_DIR"]
+    del env["SKEP_CLAUDE_CONFIG_DIR"]
     assert load_worker_config(env).claude_config_dir is None
 
 
 def test_worker_max_concurrent_override():
-    env = _worker_env() | {"FLEETD_MAX_CONCURRENT": "3"}
+    env = _worker_env() | {"SKEP_MAX_CONCURRENT": "3"}
     assert load_worker_config(env).max_concurrent == 3
 
 
@@ -72,6 +72,6 @@ def test_load_queen_config_parses_fields():
 
 def test_queen_missing_token_raises():
     env = _queen_env()
-    del env["FLEETD_BOT_TOKEN"]
+    del env["SKEP_BOT_TOKEN"]
     with pytest.raises(KeyError):
         load_queen_config(env)

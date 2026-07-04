@@ -1,4 +1,4 @@
-# fleetd Phase 2 — Queen + Isolated Workers (Design)
+# skep Phase 2 — Queen + Isolated Workers (Design)
 
 **Date:** 2026-07-04
 **Status:** Approved design, pre-implementation
@@ -45,13 +45,13 @@ where the Telegram front-end lives. So:
 ```
 Internet ──► VPS (Caddy + WireGuard, cyphy.kz) ──tunnel──► Homeserver 10.0.0.2
                         │                                        │
-                 fleet.cyphy.kz                            fleetqueen (container)
+                 skep.cyphy.kz                            skep-queen (container)
                  reverse_proxy 10.0.0.2:8765  ───────────► :8765  WS server + bot
                                                                  ▲
                         ┌────────────────────────────────────────┤ WebSocket
-                        │ (mDNS on LAN · wss://fleet.cyphy.kz over internet · WG direct)
+                        │ (mDNS on LAN · wss://skep.cyphy.kz over internet · WG direct)
         ┌───────────────┴───────────────┬──────────────────────┐
-   fleetd host=g16              fleetd host=g16          fleetd host=latitude5520
+   skep host=g16              skep host=g16          skep host=latitude5520
           profile=personal            profile=work            profile=default
    CLAUDE_CONFIG_DIR=~/.claude  =~/.claude-work          (native, spawns agents)
 ```
@@ -62,7 +62,7 @@ elected. A single machine may run the queen *and* one or more workers.
 
 ## 3. Roles
 
-### 3.1 Queen (`fleetqueen` — new entrypoint)
+### 3.1 Queen (`skep-queen` — new entrypoint)
 
 The only Telegram-aware component. Responsibilities:
 - Owns the bot token and the **sole `getUpdates`** long-poll.
@@ -73,7 +73,7 @@ The only Telegram-aware component. Responsibilities:
   message and milestones.
 - **WS server** (`aiohttp`) accepting worker connections, authenticated by a
   shared secret.
-- **mDNS advertise** (`_fleetd-queen._tcp.local.`) so LAN workers self-discover it.
+- **mDNS advertise** (`_skep-queen._tcp.local.`) so LAN workers self-discover it.
 - **Command router:** `/spawn <host> …`, `/ls` (fan-out + aggregate), `/kill
   <host:id>`, `/panic` (broadcast).
 - **Bookkeeping SQLite** — one row per task with columns `(host, profile,
@@ -87,13 +87,13 @@ The only Telegram-aware component. Responsibilities:
 - Runs **containerized on the homeserver** behind Caddy (it spawns no agents, so
   it containerizes cleanly — see §10).
 
-### 3.2 Worker (`fleetd` — refactored from Phase 1)
+### 3.2 Worker (`skepd` — refactored from Phase 1)
 
 Runs agents; never talks to Telegram. Responsibilities:
 - Keeps `Supervisor`, `agent.py`, `stream.py`, and a **local** registry (its own
   tasks, worktrees, sessions, pids — survives restart for future resume).
 - **Discovers the queen**: mDNS browse on the LAN, or an explicit
-  `--queen-url wss://fleet.cyphy.kz` (over-internet), or a WG address.
+  `--queen-url wss://skep.cyphy.kz` (over-internet), or a WG address.
 - **WS client** (outbound, NAT-friendly, shared-secret auth) to the queen.
 - Emits domain events through an `EventSink` (§5) instead of calling a Gateway.
 - **No bot token** — only the shared secret. Fewer copies of the most sensitive
@@ -134,7 +134,7 @@ configured independently, so the label and the path need not correlate.
 key in each work repo's project-scope `.claude/settings.local.json`, which Claude
 reads natively) reach only `work`-profile agents.
 
-**Deployment:** two templated units — `fleetd@personal`, `fleetd@work` — each with
+**Deployment:** two templated units — `skep@personal`, `skep@work` — each with
 its own config/env, coexisting on the host. The queen sees them as two workers
 that share a `host` but differ in `profile`. MVP rule: **one worker = one
 profile/config**; mixed-profile-within-one-worker is a later nicety, not now.
@@ -161,10 +161,10 @@ fake implementing the same interfaces.
 
 ### 6.1 Three ways a worker reaches the queen (same auth, different reach)
 1. **mDNS/DNS-SD** — zero-config on the home LAN. Queen advertises
-   `_fleetd-queen._tcp.local.` (SRV host+port, TXT `host`/`ver`); workers browse,
+   `_skep-queen._tcp.local.` (SRV host+port, TXT `host`/`ver`); workers browse,
    resolve, and dial. Same-subnet only (multicast doesn't route); Wi-Fi client
    isolation / VLANs block it.
-2. **Public link** — `--queen-url wss://fleet.cyphy.kz`. Works from anywhere over
+2. **Public link** — `--queen-url wss://skep.cyphy.kz`. Works from anywhere over
    the internet via Caddy (§10). This is "add a worker over-internet": hand it the
    link + shared secret. First-class: queen config carries `public_url`.
 3. **WireGuard** — a peer on the WG mesh dials `wss://10.0.0.2:8765` directly, no
@@ -264,8 +264,8 @@ and **mutually authenticated**. First-class concerns:
 - **Mutual authentication via challenge-response (mandatory), not a bearer
   token.** Both sides prove knowledge of the shared secret over exchanged nonces
   (HMAC), so:
-  - a **rogue/spoofed queen** (e.g. a forged `_fleetd-queen` mDNS advert on the
-    LAN, or a hijack of `fleet.cyphy.kz`) that lacks the secret **cannot** get a
+  - a **rogue/spoofed queen** (e.g. a forged `_skep-queen` mDNS advert on the
+    LAN, or a hijack of `skep.cyphy.kz`) that lacks the secret **cannot** get a
     worker to accept `spawn`/`kill` — this closes the scariest vector (fleet-wide
     RCE via a fake queen);
   - a **rogue worker** cannot impersonate a host to intercept its commands or
@@ -281,7 +281,7 @@ and **mutually authenticated**. First-class concerns:
   lock, secret protection, and the **Phase-3 gated-ops brakes** that bound what a
   spawned agent may do.
 - **Optional hardening** (noted, not required for MVP): Caddy **mTLS client certs**
-  or `basic_auth` in front of `fleet.cyphy.kz`, so only credentialed workers can
+  or `basic_auth` in front of `skep.cyphy.kz`, so only credentialed workers can
   reach the queen at all.
 - **Profile-credential isolation** per §4.
 
@@ -289,7 +289,7 @@ and **mutually authenticated**. First-class concerns:
 
 - **Queen** → homeserver container, matching the existing `homeserver/<svc>/
   compose.yml` + `.env.dist` pattern (like Tugtainer/`AGENT_SECRET`). Listens
-  `:8765`. Caddy vhost: `fleet.cyphy.kz { reverse_proxy 10.0.0.2:8765 }` — Caddy
+  `:8765`. Caddy vhost: `skep.cyphy.kz { reverse_proxy 10.0.0.2:8765 }` — Caddy
   transparently upgrades WebSocket, so `wss://` works with TLS for free. Tugtainer
   auto-updates it.
 - **Workers** → native processes (systemd user units on NixOS; Scheduled Task /
@@ -297,7 +297,7 @@ and **mutually authenticated**. First-class concerns:
 - **Co-location** — the homeserver may run the queen container *and* a native
   worker (worker → `ws://127.0.0.1:8765`). A single dev machine runs a worker
   (and, if it's the front, the queen).
-- The actual VPS wiring (Caddyfile vhost + `homeserver/fleetqueen/compose.yml` +
+- The actual VPS wiring (Caddyfile vhost + `homeserver/skep-queen/compose.yml` +
   `.env.dist`) lives in `~/gh/vps` and is a **separate deployment change**, not
   part of this repo's implementation. This spec fixes the contract: queen listens
   `:8765`, reads `FLEET_SHARED_SECRET`, advertises `public_url`.
@@ -396,7 +396,7 @@ deferred, so no blocker for Phase 2).
 ## 13. Open questions / spikes (resolve during planning/implementation)
 
 - **WebSocket through Caddy** — confirm `reverse_proxy` upgrades WS transparently
-  for `fleet.cyphy.kz` (expected yes; low risk).
+  for `skep.cyphy.kz` (expected yes; low risk).
 - **`CLAUDE_CONFIG_DIR` isolation** — confirm it fully selects the profile
   (skills/creds/settings/gortex/hooks) for a spawned `claude -p` agent (expected
   yes; the mechanism the user already relies on for `~/.claude` vs `~/.claude-work`).
@@ -425,7 +425,7 @@ deferred, so no blocker for Phase 2).
 ## 15. New / changed files (indicative)
 
 ```
-src/fleetd/
+src/skep/
   transport.py        # EventSink / CommandSource interfaces + in-memory fake
   ws_transport.py     # WebSocket server (queen) + client (worker)
   discovery.py        # mDNS advertise (queen) + browse (worker); --queen-url
@@ -440,7 +440,7 @@ src/fleetd/
     app.py            # event loop + WS client + mDNS browse + capacity
     (supervisor.py refactored to emit EventSink; agent.py env injection)
   config.py           # QueenConfig + WorkerConfig (file + env)
-pyproject.toml        # + zeroconf ; console scripts: fleetqueen, fleetd
+pyproject.toml        # + zeroconf ; console scripts: skep-queen, skep
 ```
 
 ## 16. Sources

@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from fleetd.config import WorkerConfig
-from fleetd.db import Registry
-from fleetd.stream import Event
-from fleetd.supervisor import CapacityError, Supervisor
+from skep.config import WorkerConfig
+from skep.db import Registry
+from skep.stream import Event
+from skep.supervisor import CapacityError, Supervisor
 
 
 def _cfg(tmp_path, max_concurrent=8):

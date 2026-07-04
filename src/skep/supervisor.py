@@ -5,11 +5,11 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from fleetd.agent import AgentProcess, create_worktree
-from fleetd.config import WorkerConfig
-from fleetd.db import Registry, Task
-from fleetd.formatting import activity_line, milestone_message
-from fleetd.transport import EventSink
+from skep.agent import AgentProcess, create_worktree
+from skep.config import WorkerConfig
+from skep.db import Registry, Task
+from skep.formatting import activity_line, milestone_message
+from skep.transport import EventSink
 
 
 class CapacityError(Exception):
@@ -48,7 +48,7 @@ class Supervisor:
             )
         repo_path = self._cfg.repos_root / repo
         tid = self._reg.add_task(repo, task, "", mode="native")
-        branch = f"fleetd/{_slug(task)}-{tid}"
+        branch = f"skep/{_slug(task)}-{tid}"
         worktree_path = self._cfg.worktrees_root / f"{repo}-{tid}"
         self._reg.update(tid, worktree_path=str(worktree_path))
 

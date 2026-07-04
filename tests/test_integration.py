@@ -2,12 +2,12 @@ import asyncio
 
 import pytest
 
-from fleetd.app import build_worker_and_router, parse_spawn
-from fleetd.config import QueenConfig, WorkerConfig
-from fleetd.db import Registry
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.router import QueenRouter
-from fleetd.queen.telegram_sink import QueenSink
+from skep.app import build_worker_and_router, parse_spawn
+from skep.config import QueenConfig, WorkerConfig
+from skep.db import Registry
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.router import QueenRouter
+from skep.queen.telegram_sink import QueenSink
 from unittest.mock import AsyncMock, MagicMock
 
 

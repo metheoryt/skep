@@ -1,5 +1,5 @@
-from fleetd.formatting import activity_line, escape_md, milestone_message
-from fleetd.stream import Event
+from skep.formatting import activity_line, escape_md, milestone_message
+from skep.stream import Event
 
 
 def test_escape_md_escapes_reserved_chars():

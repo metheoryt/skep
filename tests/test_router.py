@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.router import QueenRouter, UnknownWorker
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.router import QueenRouter, UnknownWorker
 
 
 def _handler():

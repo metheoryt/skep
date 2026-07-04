@@ -1,20 +1,34 @@
-# fleetd — project memory
+# skep — project memory
 
 <!-- Repo-local, git-tracked, auto-loaded at session start. Durable project facts
 only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 ## Decisions
 
-- **Build-vs-buy (evaluated 2026-07-04): decided to BUILD fleetd despite heavy
+- **PROJECT RENAMED `fleetd` → `skep` (2026-07-05), branch `skep-phase2`
+  (formerly `fleetd-phase2`/`gortex-align`).** Hive metaphor: a *skep* is a
+  traditional woven beehive — the vessel that houses the colony (queen + workers,
+  which are the literal roles in the code). Chosen for being free everywhere
+  (PyPI + GitHub) after `apiary` (great fit but collides with apiary.io/Oracle)
+  and fleet-metaphor variants were considered. Package `src/skep/`, console
+  script `skep`, env prefix `SKEP_`. Plan-2 binary names: worker daemon `skepd`,
+  queen `skep-queen` (was `fleetd`/`fleetqueen`). Deploy domain `skep.cyphy.kz`
+  (was `fleet.cyphy.kz`). Upstream: `git@github.com:metheoryt/skep.git`. The
+  gortex auto-generated skills table (`CLAUDE.md`/`AGENTS.md`/`.claude/skills/
+  generated/`) still says "fleetd" — machine-managed, regenerates on reindex.
+  NOTE: the English noun "fleet" (a fleet of agents) intentionally survives in
+  prose; only the `fleetd`/`fleetqueen`/`FLEETD_` tokens were renamed.
+
+- **Build-vs-buy (evaluated 2026-07-04): decided to BUILD skep despite heavy
   overlap with two official Anthropic features.** `claude remote-control --spawn
   worktree --capacity N` (worktree-isolated agent fleet driven from claude.ai /
-  Claude mobile app, outbound-only HTTPS, `--sandbox`) covers much of fleetd's
+  Claude mobile app, outbound-only HTTPS, `--sandbox`) covers much of skep's
   core; the official **Channels** Telegram plugin (`/plugin install
   telegram@claude-plugins-official`, pairing + allowlist auth) covers the
   Telegram+owner-lock piece but only pushes into ONE running session (no
   spawn/fleet/worktree/kill, no tool-by-tool streaming). Owner is on **Pro/Max
   claude.ai OAuth**, so Remote Control IS available to them — they chose to build
-  anyway. **Differentiator that justifies fleetd:** Telegram-native *fleet*
+  anyway. **Differentiator that justifies skep:** Telegram-native *fleet*
   control (`/spawn`→worktree, `/ls`/`/kill`/`/panic` across many tasks) + live
   tool-by-tool streaming into per-task forum topics + fully self-hosted. Note:
   Remote Control is UNAVAILABLE on API-key/Bedrock/Vertex or a custom
@@ -26,9 +40,9 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 - **Phase 2 was RE-SCOPED 2026-07-04 from "talk-back + brakes" to "Queen +
   isolated workers"** (topology first, because talk-back routing depends on where
-  the Telegram front lives). See `2026-07-04-fleetd-phase2-queen-workers-design.md`.
+  the Telegram front lives). See `2026-07-04-skep-phase2-queen-workers-design.md`.
   Key settled decisions:
-  - **Queen + workers are SEPARATE scripts/processes** (`fleetqueen`, `fleetd`),
+  - **Queen + workers are SEPARATE scripts/processes** (`skep-queen`, `skepd`),
     explicit roles — NO leader election / auto-failover / consensus. The bot
     token-as-lock `409` check is only a startup guard against an accidental
     double-queen.
@@ -36,12 +50,12 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     (smaller blast radius). Queen owns all Telegram I/O + formatting
     (`telegram_gw.py`/`formatting.py` move to the queen); workers emit domain
     events over a WebSocket via an `EventSink`/`CommandSource` seam.
-  - **Queen is containerized on the homeserver behind Caddy** (`fleet.cyphy.kz`
+  - **Queen is containerized on the homeserver behind Caddy** (`skep.cyphy.kz`
     → `reverse_proxy 10.0.0.2:8765`, WS upgrade is transparent); **workers stay
     native** (agents need host access). Queen never spawns agents, so it
     containerizes cleanly.
-  - **Discovery: 3 tiers, same shared-secret auth** — mDNS (`_fleetd-queen._tcp`)
-    on the LAN, `--queen-url wss://fleet.cyphy.kz` over internet, WG direct
+  - **Discovery: 3 tiers, same shared-secret auth** — mDNS (`_skep-queen._tcp`)
+    on the LAN, `--queen-url wss://skep.cyphy.kz` over internet, WG direct
     (`10.0.0.2:8765`). Bot API can't list topics → queen keeps a small
     bookkeeping SQLite `ref→(host,profile,local_task_id,topic_id,msg_id)`.
   - **Multi-worker isolation is first-class:** one worker per Claude profile,
@@ -100,7 +114,7 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   entrypoints + mutual auth + mDNS + heartbeat/presence + queen auto-onboarding +
   deploy — NOT yet written).
 
-- **Phase 2 Plan 1 EXECUTED 2026-07-05** (branch `fleetd-phase2`, formerly
+- **Phase 2 Plan 1 EXECUTED 2026-07-05** (branch `skep-phase2`, formerly
   `gortex-align`; local-only repo, no remote). All 9 TDD tasks landed: `Config`
   split into `WorkerConfig`/`QueenConfig`; `transport.py` seam
   (`EventSink`/`CommandHandler`/`QueenInbox` + `InMemoryEventSink`); formatting
@@ -110,7 +124,7 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   QueenSink, `router.py` QueenRouter); interim single-process `app.py` wiring queen
   +worker over the in-memory transport (`build_worker_and_router`, `parse_spawn`,
   owner-gated `/spawn`/`/ls`/`/kill`/`/panic`). 69 tests pass. **Next step: write +
-  execute Plan 2** (real WebSocket transport, split `fleetqueen`/`fleetd`
+  execute Plan 2** (real WebSocket transport, split `skep-queen`/`skepd`
   entrypoints, mutual auth, mDNS, heartbeat/presence, queen auto-onboarding,
   containerized-queen deploy). Two execution gotchas for Plan 2: (a) the plan
   predated this repo's pyright governance, so plan-faithful rewrites regressed
@@ -163,9 +177,9 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     loop-prevention or delivery guarantees (at-least-once/exactly-once, TTLs,
     dead-letter) — so mailbox delivery semantics are ours to spec (ties to the
     bot-to-bot loop-prevention already flagged). Full report:
-    `/tmp/claude-1000/-home-me-gh-fleetd/50a5c29e-15d2-4849-9e2e-1cfc1179d282/tasks/wb0dnj0qu.output`.
+    `/tmp/claude-1000/-home-me-gh-skep/50a5c29e-15d2-4849-9e2e-1cfc1179d282/tasks/wb0dnj0qu.output`.
 
-- **DECIDED 2026-07-05: shared vector memory becomes a first-class fleetd
+- **DECIDED 2026-07-05: shared vector memory becomes a first-class skep
   capability (a future phase, NOT folded into the P2 queen/worker split).** Owner
   confirmed it's a good idea. Shape (from the survey verdict): a queen-hosted,
   centrally-governed semantic memory substrate (blackboard) that workers/agents
@@ -176,7 +190,7 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   when scoping — start embedded for a small fleet unless N workers justifies the split.
 
 - **Kafka EVALUATED and REJECTED (2026-07-05) for all five candidate roles.**
-  Scale/shape mismatch: fleetd is a small star-shaped mostly-synchronous command
+  Scale/shape mismatch: skep is a small star-shaped mostly-synchronous command
   system (1 queen, handful of workers, `max_concurrent` 8), Kafka is for
   large decoupled high-throughput streaming meshes. Per-role: (A) transport — no,
   commands are addressed RPC-with-ack to one worker; WS already gives bidirectional
@@ -186,10 +200,10 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   binary) before Kafka. (C) shared-memory backbone — no, all prior art (Mem0,
   namespace/ACL/version-check, MemClaw) is CRUD-over-a-store, not an event log.
   (D) cross-fleet federation — no, Telegram bot-to-bot + A2A already right-sized for
-  the rare queen↔queen edge. Revisit ONLY if fleetd ever becomes multi-tenant SaaS
+  the rare queen↔queen edge. Revisit ONLY if skep ever becomes multi-tenant SaaS
   with hundreds of concurrent agents.
 
-- **NORTH STAR set 2026-07-05: fleetd as an autonomous agent "company," human as
+- **NORTH STAR set 2026-07-05: skep as an autonomous agent "company," human as
   CEO.** Owner wants the fleet to mirror a working organization. Key architectural
   insight that makes this ADDITIVE, not a teardown: **communication topology and
   org hierarchy are ORTHOGONAL.** The star topology (`no worker↔worker`, every node
@@ -204,7 +218,7 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     the queen persists, **rehydrated into a fresh ephemeral agent on demand**, which
     acts then terminates. So there are STILL no long-running agents — a manager
     invocation is just an ephemeral spawn seeded with durable state (actor model +
-    persisted state + on-demand activation). Preserves fleetd's entire process model
+    persisted state + on-demand activation). Preserves skep's entire process model
     (spawn/kill/worktree, containerized queen, workers-do-the-spawning); adds only
     state management on the queen. **At most one live invocation per manager**
     (messages queue) — actor single-thread guarantee, no split-brain.
@@ -250,23 +264,23 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 - **Usage-limit handling = PARK & RESUME (recorded 2026-07-05).** The `claude` CLI
   has NO native pause/resume: on a Pro/Max plan usage-limit hit it "blocks further
   requests until the reset time" and the process terminates (confirmed via docs
-  errors.md/headless.md). fleetd must build: Supervisor detects the limit event in
+  errors.md/headless.md). skep must build: Supervisor detects the limit event in
   the agent's stream, parses the reset time from the message ("…resets 3:45pm" /
   weekly), marks the task `parked-until <reset>` (NOT failed); queen notifies the
   CEO in Telegram. **Auto-resume via `--resume <session_id>` DOES work in headless
   `-p` mode → P4 (resume-after-restart)**; session-id lookup is scoped to the
   working dir + its worktrees, so the resume re-spawn MUST reuse the SAME worktree
-  (fits fleetd's worktree model). **VERIFY EMPIRICALLY before building detection**
+  (fits skep's worktree model). **VERIFY EMPIRICALLY before building detection**
   (undocumented, mirror the stdin-gotcha verify style): exact stream-json event
   shape + exit code on a limit hit. Distinct from context-window-full, which the
-  CLI handles itself via compaction (no fleetd action). Profile plan limits are
+  CLI handles itself via compaction (no skep action). Profile plan limits are
   INDEPENDENT (owner-confirmed) but route-around-exhaustion is MOSTLY N/A — see the
   profile↔repo binding constraint below.
 
 - **Vasya integration = QUEEN-side surface, NOT a worker endpoint (north-star
   adjacency, recorded 2026-07-05).** Vasya is the owner's other project: a Jarvis-
   like voice assistant on a Windows laptop that runs AI to manage the host. Q: can
-  local host agents reach the fleetd worker on their host? A: by design NO — the
+  local host agents reach the skep worker on their host? A: by design NO — the
   worker dials OUT to the queen and its only localhost server (the L0 MCP shim) is
   bound to one spawned agent's `ref`; exposing the worker breaks "trusts exactly one
   peer" + adds a local RCE authz surface. Integration goes to the QUEEN (or a local
@@ -314,7 +328,7 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   with `parse_mode=None`. Unescaped repo names / result text (which routinely
   contain `-` `.` `(` `)`) cause Telegram 400 "can't parse entities".
 - Phase 1 is `native` mode only, single process. Phase 2 = queen/workers (see
-  `2026-07-04-fleetd-phase2-queen-workers-design.md`). `ask_human` MCP,
+  `2026-07-04-skep-phase2-queen-workers-design.md`). `ask_human` MCP,
   soft-steer, gated-ops approval → Phase 3; sandbox, resume-after-restart,
   worktree cleanup → Phase 4. **Shared vector memory (queen-hosted blackboard) →
   its own later phase, after P2/P3** (decided 2026-07-05; see Decisions).

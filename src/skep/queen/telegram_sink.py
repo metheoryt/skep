@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from fleetd.formatting import escape_md
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.telegram_gw import Gateway
+from skep.formatting import escape_md
+from skep.queen.bookkeeping import Bookkeeping
+from skep.telegram_gw import Gateway
 
 
 class QueenSink:

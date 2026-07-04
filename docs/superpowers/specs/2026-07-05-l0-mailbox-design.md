@@ -1,8 +1,8 @@
-# fleetd L0 — Mailbox (Design)
+# skep L0 — Mailbox (Design)
 
 **Date:** 2026-07-05
 **Status:** Approved design, pre-implementation
-**Relationship:** First spec of the "fleetd as an autonomous agent company" north
+**Relationship:** First spec of the "skep as an autonomous agent company" north
 star (recorded in `.claude/memory/project.md`). The mailbox is layer **L0** — the
 foundation every later layer sits on:
 
@@ -28,7 +28,7 @@ peer). The org hierarchy of the north star is *logical*, so all inter-agent
 messages route **through the queen as a switchboard**. The queen stays **non-LLM**:
 the mailbox adds a routing table + an inbox table, not intelligence.
 
-L0 is buildable on today's fleetd (queen + ephemeral per-task agents + Telegram)
+L0 is buildable on today's skep (queen + ephemeral per-task agents + Telegram)
 because it is **pull, not push** — see §3.
 
 ## 2. Scope & non-goals
@@ -275,10 +275,10 @@ Test groups (each red→green):
 
 - `.claude/memory/project.md` — north star, decomposition (L0–L5), Kafka rejection,
   usage-limit park-&-resume, profile↔repo binding, the agent-comms survey findings.
-- `docs/superpowers/specs/2026-07-04-fleetd-phase2-queen-workers-design.md` —
+- `docs/superpowers/specs/2026-07-04-skep-phase2-queen-workers-design.md` —
   queen/worker topology, the transport seam (§5), identity & routing (§8),
   security (§9), the anticipated "cross-worker via queen" note.
-- `docs/superpowers/plans/2026-07-04-fleetd-phase2-plan1-queen-worker-seam.md` — the
+- `docs/superpowers/plans/2026-07-04-skep-phase2-plan1-queen-worker-seam.md` — the
   in-memory transport seam L0 tests build on.
 - Agent-comms deep-research report (2026-07-05): AutoGen Core's direct-by-ID +
   topic-indirection addressing (the borrowed model); the finding that no emerging

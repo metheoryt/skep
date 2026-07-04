@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fleetd.stream import Event
+from skep.stream import Event
 
 _MD_RESERVED = "\\_*[]()~`>#+-=|{}.!"
 _MAX_ACTIVITY = 200

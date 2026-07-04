@@ -1,4 +1,4 @@
-from fleetd.queen.bookkeeping import Bookkeeping
+from skep.queen.bookkeeping import Bookkeeping
 
 
 def test_add_and_lookup_by_worker_task():

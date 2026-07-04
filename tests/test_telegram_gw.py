@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from fleetd.config import QueenConfig
-from fleetd.telegram_gw import Gateway, is_owner
+from skep.config import QueenConfig
+from skep.telegram_gw import Gateway, is_owner
 
 
 def _cfg():

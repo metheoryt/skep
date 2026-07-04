@@ -1,4 +1,4 @@
-from fleetd.transport import InMemoryEventSink
+from skep.transport import InMemoryEventSink
 
 
 class RecordingInbox:

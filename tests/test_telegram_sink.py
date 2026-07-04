@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.telegram_sink import QueenSink
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.telegram_sink import QueenSink
 
 
 def _gateway():

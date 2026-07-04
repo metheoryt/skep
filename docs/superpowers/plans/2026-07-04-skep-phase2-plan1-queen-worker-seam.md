@@ -1,4 +1,4 @@
-# fleetd Phase 2 — Plan 1: Queen/Worker split behind the transport seam
+# skep Phase 2 — Plan 1: Queen/Worker split behind the transport seam
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -23,7 +23,7 @@
 ## File Structure
 
 ```
-src/fleetd/
+src/skep/
   config.py            # MODIFY: split Config -> WorkerConfig + QueenConfig
   transport.py         # CREATE: EventSink / CommandHandler / QueenInbox + InMemoryEventSink
   formatting.py        # MODIFY: activity_line/milestone_message -> plain (no escape); escape_md stays
@@ -54,7 +54,7 @@ tests/
 ## Task 1: Split config into WorkerConfig + QueenConfig
 
 **Files:**
-- Modify: `src/fleetd/config.py`
+- Modify: `src/skep/config.py`
 - Test: `tests/test_config.py`
 
 **Interfaces:**
@@ -70,25 +70,25 @@ from pathlib import Path
 
 import pytest
 
-from fleetd.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
+from skep.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
 
 
 def _worker_env():
     return {
-        "FLEETD_HOST": "g16",
-        "FLEETD_PROFILE": "work",
-        "FLEETD_CLAUDE_CONFIG_DIR": "/home/me/.claude-work",
-        "FLEETD_REPOS_ROOT": "/home/me/gh",
-        "FLEETD_WORKTREES_ROOT": "/home/me/.fleetd/wt",
-        "FLEETD_DB": "/home/me/.fleetd/work.sqlite",
+        "SKEP_HOST": "g16",
+        "SKEP_PROFILE": "work",
+        "SKEP_CLAUDE_CONFIG_DIR": "/home/me/.claude-work",
+        "SKEP_REPOS_ROOT": "/home/me/gh",
+        "SKEP_WORKTREES_ROOT": "/home/me/.skep/wt",
+        "SKEP_DB": "/home/me/.skep/work.sqlite",
     }
 
 
 def _queen_env():
     return {
-        "FLEETD_BOT_TOKEN": "tok",
-        "FLEETD_OWNER_ID": "42",
-        "FLEETD_GROUP_CHAT_ID": "-1001",
+        "SKEP_BOT_TOKEN": "tok",
+        "SKEP_OWNER_ID": "42",
+        "SKEP_GROUP_CHAT_ID": "-1001",
     }
 
 
@@ -99,8 +99,8 @@ def test_load_worker_config_parses_fields():
         profile="work",
         claude_config_dir="/home/me/.claude-work",
         repos_root=Path("/home/me/gh"),
-        worktrees_root=Path("/home/me/.fleetd/wt"),
-        db_path="/home/me/.fleetd/work.sqlite",
+        worktrees_root=Path("/home/me/.skep/wt"),
+        db_path="/home/me/.skep/work.sqlite",
         max_concurrent=8,
         claude_bin="claude",
     )
@@ -111,24 +111,24 @@ def test_worker_host_defaults_to_hostname(monkeypatch):
 
     monkeypatch.setattr(socket, "gethostname", lambda: "boxy")
     env = _worker_env()
-    del env["FLEETD_HOST"]
+    del env["SKEP_HOST"]
     assert load_worker_config(env).host == "boxy"
 
 
 def test_worker_profile_defaults_to_default():
     env = _worker_env()
-    del env["FLEETD_PROFILE"]
+    del env["SKEP_PROFILE"]
     assert load_worker_config(env).profile == "default"
 
 
 def test_worker_claude_config_dir_optional():
     env = _worker_env()
-    del env["FLEETD_CLAUDE_CONFIG_DIR"]
+    del env["SKEP_CLAUDE_CONFIG_DIR"]
     assert load_worker_config(env).claude_config_dir is None
 
 
 def test_worker_max_concurrent_override():
-    env = _worker_env() | {"FLEETD_MAX_CONCURRENT": "3"}
+    env = _worker_env() | {"SKEP_MAX_CONCURRENT": "3"}
     assert load_worker_config(env).max_concurrent == 3
 
 
@@ -140,7 +140,7 @@ def test_load_queen_config_parses_fields():
 
 def test_queen_missing_token_raises():
     env = _queen_env()
-    del env["FLEETD_BOT_TOKEN"]
+    del env["SKEP_BOT_TOKEN"]
     with pytest.raises(KeyError):
         load_queen_config(env)
 ```
@@ -150,7 +150,7 @@ def test_queen_missing_token_raises():
 Run: `uv run pytest tests/test_config.py -v`
 Expected: FAIL — `ImportError: cannot import name 'WorkerConfig'`.
 
-- [ ] **Step 3: Replace `src/fleetd/config.py`**
+- [ ] **Step 3: Replace `src/skep/config.py`**
 
 ```python
 from __future__ import annotations
@@ -183,23 +183,23 @@ class QueenConfig:
 
 def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
     return WorkerConfig(
-        host=env.get("FLEETD_HOST") or socket.gethostname(),
-        profile=env.get("FLEETD_PROFILE", "default"),
-        claude_config_dir=env.get("FLEETD_CLAUDE_CONFIG_DIR"),
-        repos_root=Path(env["FLEETD_REPOS_ROOT"]),
-        worktrees_root=Path(env["FLEETD_WORKTREES_ROOT"]),
-        db_path=env["FLEETD_DB"],
-        max_concurrent=int(env.get("FLEETD_MAX_CONCURRENT", "8")),
-        claude_bin=env.get("FLEETD_CLAUDE_BIN", "claude"),
+        host=env.get("SKEP_HOST") or socket.gethostname(),
+        profile=env.get("SKEP_PROFILE", "default"),
+        claude_config_dir=env.get("SKEP_CLAUDE_CONFIG_DIR"),
+        repos_root=Path(env["SKEP_REPOS_ROOT"]),
+        worktrees_root=Path(env["SKEP_WORKTREES_ROOT"]),
+        db_path=env["SKEP_DB"],
+        max_concurrent=int(env.get("SKEP_MAX_CONCURRENT", "8")),
+        claude_bin=env.get("SKEP_CLAUDE_BIN", "claude"),
     )
 
 
 def load_queen_config(env: Mapping[str, str]) -> QueenConfig:
     return QueenConfig(
-        bot_token=env["FLEETD_BOT_TOKEN"],
-        owner_id=int(env["FLEETD_OWNER_ID"]),
-        group_chat_id=int(env["FLEETD_GROUP_CHAT_ID"]),
-        bookkeeping_db=env.get("FLEETD_QUEEN_DB", "queen.sqlite"),
+        bot_token=env["SKEP_BOT_TOKEN"],
+        owner_id=int(env["SKEP_OWNER_ID"]),
+        group_chat_id=int(env["SKEP_GROUP_CHAT_ID"]),
+        bookkeeping_db=env.get("SKEP_QUEEN_DB", "queen.sqlite"),
     )
 ```
 
@@ -211,7 +211,7 @@ Expected: PASS (7 passed).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/config.py tests/test_config.py
+git add src/skep/config.py tests/test_config.py
 git commit -m "refactor: split Config into WorkerConfig + QueenConfig"
 ```
 
@@ -220,7 +220,7 @@ git commit -m "refactor: split Config into WorkerConfig + QueenConfig"
 ## Task 2: Transport seam (interfaces + in-memory link)
 
 **Files:**
-- Create: `src/fleetd/transport.py`
+- Create: `src/skep/transport.py`
 - Test: `tests/test_transport.py`
 
 **Interfaces:**
@@ -233,7 +233,7 @@ git commit -m "refactor: split Config into WorkerConfig + QueenConfig"
 - [ ] **Step 1: Write the failing test** — `tests/test_transport.py`
 
 ```python
-from fleetd.transport import InMemoryEventSink
+from skep.transport import InMemoryEventSink
 
 
 class RecordingInbox:
@@ -273,9 +273,9 @@ async def test_in_memory_sink_stamps_identity_and_forwards():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_transport.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'fleetd.transport'`.
+Expected: FAIL — `ModuleNotFoundError: No module named 'skep.transport'`.
 
-- [ ] **Step 3: Write `src/fleetd/transport.py`**
+- [ ] **Step 3: Write `src/skep/transport.py`**
 
 ```python
 from __future__ import annotations
@@ -345,7 +345,7 @@ Expected: PASS (1 passed).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/transport.py tests/test_transport.py
+git add src/skep/transport.py tests/test_transport.py
 git commit -m "feat: transport seam (EventSink/CommandHandler/QueenInbox) + in-memory link"
 ```
 
@@ -354,18 +354,18 @@ git commit -m "feat: transport seam (EventSink/CommandHandler/QueenInbox) + in-m
 ## Task 3: Move escaping to the queen — plain formatting descriptors
 
 **Files:**
-- Modify: `src/fleetd/formatting.py`
+- Modify: `src/skep/formatting.py`
 - Test: `tests/test_formatting.py`
 
 **Interfaces:**
-- Consumes: `Event` from `fleetd.stream`.
+- Consumes: `Event` from `skep.stream`.
 - Produces (changed semantics): `activity_line(event) -> str | None` and `milestone_message(event) -> str | None` now return **plain, unescaped** text. `escape_md(text) -> str` unchanged (the queen applies it).
 
 - [ ] **Step 1: Replace `tests/test_formatting.py`**
 
 ```python
-from fleetd.formatting import activity_line, escape_md, milestone_message
-from fleetd.stream import Event
+from skep.formatting import activity_line, escape_md, milestone_message
+from skep.stream import Event
 
 
 def test_escape_md_escapes_reserved_chars():
@@ -413,7 +413,7 @@ def test_activity_line_truncates_long_text():
 Run: `uv run pytest tests/test_formatting.py -v`
 Expected: FAIL — `test_activity_line_for_tool_use_is_plain` expects `"🔧 edit_file"` but current code escapes to `"🔧 edit\\_file"`.
 
-- [ ] **Step 3: Edit `src/fleetd/formatting.py`** — drop `escape_md` from the two descriptors (keep `escape_md` itself and `_truncate`):
+- [ ] **Step 3: Edit `src/skep/formatting.py`** — drop `escape_md` from the two descriptors (keep `escape_md` itself and `_truncate`):
 
 ```python
 def activity_line(event: Event) -> str | None:
@@ -440,7 +440,7 @@ Expected: PASS (8 passed).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/formatting.py tests/test_formatting.py
+git add src/skep/formatting.py tests/test_formatting.py
 git commit -m "refactor: activity/milestone descriptors are plain; escaping moves to queen"
 ```
 
@@ -449,7 +449,7 @@ git commit -m "refactor: activity/milestone descriptors are plain; escaping move
 ## Task 4: Profile isolation — CLAUDE_CONFIG_DIR env injection
 
 **Files:**
-- Modify: `src/fleetd/agent.py`
+- Modify: `src/skep/agent.py`
 - Test: `tests/test_agent.py`
 
 **Interfaces:**
@@ -459,7 +459,7 @@ git commit -m "refactor: activity/milestone descriptors are plain; escaping move
 - [ ] **Step 1: Add failing tests to `tests/test_agent.py`** (append):
 
 ```python
-from fleetd.agent import _agent_env
+from skep.agent import _agent_env
 
 
 def test_agent_env_injects_config_dir(monkeypatch):
@@ -480,9 +480,9 @@ def test_agent_env_none_leaves_config_dir_unset(monkeypatch):
 Run: `uv run pytest tests/test_agent.py::test_agent_env_injects_config_dir -v`
 Expected: FAIL — `ImportError: cannot import name '_agent_env'`.
 
-- [ ] **Step 3: Edit `src/fleetd/agent.py`**
+- [ ] **Step 3: Edit `src/skep/agent.py`**
 
-Add the import and helper near the top (after `from fleetd.stream import ...`):
+Add the import and helper near the top (after `from skep.stream import ...`):
 
 ```python
 import os
@@ -530,7 +530,7 @@ Expected: PASS (all — the two new tests plus the existing 3).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/agent.py tests/test_agent.py
+git add src/skep/agent.py tests/test_agent.py
 git commit -m "feat: agent CLAUDE_CONFIG_DIR injection for per-worker profile isolation"
 ```
 
@@ -539,7 +539,7 @@ git commit -m "feat: agent CLAUDE_CONFIG_DIR injection for per-worker profile is
 ## Task 5: Refactor Supervisor to emit EventSink + capacity cap
 
 **Files:**
-- Modify: `src/fleetd/supervisor.py`
+- Modify: `src/skep/supervisor.py`
 - Test: `tests/test_supervisor.py`
 
 **Interfaces:**
@@ -558,10 +558,10 @@ from pathlib import Path
 
 import pytest
 
-from fleetd.config import WorkerConfig
-from fleetd.db import Registry
-from fleetd.stream import Event
-from fleetd.supervisor import CapacityError, Supervisor
+from skep.config import WorkerConfig
+from skep.db import Registry
+from skep.stream import Event
+from skep.supervisor import CapacityError, Supervisor
 
 
 def _cfg(tmp_path, max_concurrent=8):
@@ -700,7 +700,7 @@ async def test_panic_kills_all_active(tmp_path):
 Run: `uv run pytest tests/test_supervisor.py -v`
 Expected: FAIL — `ImportError: cannot import name 'CapacityError'`.
 
-- [ ] **Step 3: Replace `src/fleetd/supervisor.py`**
+- [ ] **Step 3: Replace `src/skep/supervisor.py`**
 
 ```python
 from __future__ import annotations
@@ -708,11 +708,11 @@ from __future__ import annotations
 import asyncio
 import re
 
-from fleetd.agent import AgentProcess, create_worktree
-from fleetd.config import WorkerConfig
-from fleetd.db import Registry, Task
-from fleetd.formatting import activity_line, milestone_message
-from fleetd.transport import EventSink
+from skep.agent import AgentProcess, create_worktree
+from skep.config import WorkerConfig
+from skep.db import Registry, Task
+from skep.formatting import activity_line, milestone_message
+from skep.transport import EventSink
 
 
 class CapacityError(Exception):
@@ -745,7 +745,7 @@ class Supervisor:
             )
         repo_path = self._cfg.repos_root / repo
         tid = self._reg.add_task(repo, task, "", mode="native")
-        branch = f"fleetd/{_slug(task)}-{tid}"
+        branch = f"skep/{_slug(task)}-{tid}"
         worktree_path = self._cfg.worktrees_root / f"{repo}-{tid}"
         self._reg.update(tid, worktree_path=str(worktree_path))
 
@@ -843,7 +843,7 @@ Expected: PASS (5 passed).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/supervisor.py tests/test_supervisor.py
+git add src/skep/supervisor.py tests/test_supervisor.py
 git commit -m "refactor: Supervisor emits EventSink domain events + capacity cap"
 ```
 
@@ -852,7 +852,7 @@ git commit -m "refactor: Supervisor emits EventSink domain events + capacity cap
 ## Task 6: Queen bookkeeping store
 
 **Files:**
-- Create: `src/fleetd/queen/__init__.py`, `src/fleetd/queen/bookkeeping.py`
+- Create: `src/skep/queen/__init__.py`, `src/skep/queen/bookkeeping.py`
 - Test: `tests/test_bookkeeping.py`
 
 **Interfaces:**
@@ -863,7 +863,7 @@ git commit -m "refactor: Supervisor emits EventSink domain events + capacity cap
 - [ ] **Step 1: Write the failing test** — `tests/test_bookkeeping.py`
 
 ```python
-from fleetd.queen.bookkeeping import Bookkeeping
+from skep.queen.bookkeeping import Bookkeeping
 
 
 def test_add_and_lookup_by_worker_task():
@@ -914,15 +914,15 @@ def test_worker_task_pairs_are_distinct_per_host_profile():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_bookkeeping.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'fleetd.queen'`.
+Expected: FAIL — `ModuleNotFoundError: No module named 'skep.queen'`.
 
-- [ ] **Step 3: Create `src/fleetd/queen/__init__.py`** (empty):
+- [ ] **Step 3: Create `src/skep/queen/__init__.py`** (empty):
 
 ```python
 """Queen: the Telegram-owning front of the fleet."""
 ```
 
-- [ ] **Step 4: Write `src/fleetd/queen/bookkeeping.py`**
+- [ ] **Step 4: Write `src/skep/queen/bookkeeping.py`**
 
 ```python
 from __future__ import annotations
@@ -1033,7 +1033,7 @@ Expected: PASS (5 passed).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/fleetd/queen/__init__.py src/fleetd/queen/bookkeeping.py tests/test_bookkeeping.py
+git add src/skep/queen/__init__.py src/skep/queen/bookkeeping.py tests/test_bookkeeping.py
 git commit -m "feat: queen bookkeeping store (ref -> host/profile/task/topic mapping)"
 ```
 
@@ -1042,11 +1042,11 @@ git commit -m "feat: queen bookkeeping store (ref -> host/profile/task/topic map
 ## Task 7: Queen Telegram sink (QueenInbox → topics/messages)
 
 **Files:**
-- Create: `src/fleetd/queen/telegram_sink.py`
+- Create: `src/skep/queen/telegram_sink.py`
 - Test: `tests/test_telegram_sink.py`
 
 **Interfaces:**
-- Consumes: `Gateway` (`fleetd.telegram_gw`), `Bookkeeping`, `escape_md` (`fleetd.formatting`).
+- Consumes: `Gateway` (`skep.telegram_gw`), `Bookkeeping`, `escape_md` (`skep.formatting`).
 - Produces: `QueenSink(gateway: Gateway, bookkeeping: Bookkeeping)` implementing `QueenInbox`:
   - `on_task_started` → `gateway.create_topic(f"{host}·{profile}·{repo}")`, `bookkeeping.add(...)`.
   - `on_activity` → first line `gateway.post(topic, escape_md(line))` + `set_activity_msg`; subsequent `gateway.edit(topic, msg_id, escape_md(line))`.
@@ -1060,8 +1060,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.telegram_sink import QueenSink
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.telegram_sink import QueenSink
 
 
 def _gateway():
@@ -1123,16 +1123,16 @@ async def test_activity_for_unknown_task_is_ignored():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_telegram_sink.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'fleetd.queen.telegram_sink'`.
+Expected: FAIL — `ModuleNotFoundError: No module named 'skep.queen.telegram_sink'`.
 
-- [ ] **Step 3: Write `src/fleetd/queen/telegram_sink.py`**
+- [ ] **Step 3: Write `src/skep/queen/telegram_sink.py`**
 
 ```python
 from __future__ import annotations
 
-from fleetd.formatting import escape_md
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.telegram_gw import Gateway
+from skep.formatting import escape_md
+from skep.queen.bookkeeping import Bookkeeping
+from skep.telegram_gw import Gateway
 
 
 class QueenSink:
@@ -1182,7 +1182,7 @@ Expected: PASS (5 passed).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/queen/telegram_sink.py tests/test_telegram_sink.py
+git add src/skep/queen/telegram_sink.py tests/test_telegram_sink.py
 git commit -m "feat: queen Telegram sink renders worker events into per-task topics"
 ```
 
@@ -1191,11 +1191,11 @@ git commit -m "feat: queen Telegram sink renders worker events into per-task top
 ## Task 8: Queen router — worker registry + commands
 
 **Files:**
-- Create: `src/fleetd/queen/router.py`
+- Create: `src/skep/queen/router.py`
 - Test: `tests/test_router.py`
 
 **Interfaces:**
-- Consumes: `Bookkeeping`, `CommandHandler` (`fleetd.transport`), `escape_md`.
+- Consumes: `Bookkeeping`, `CommandHandler` (`skep.transport`), `escape_md`.
 - Produces:
   - `class UnknownWorker(Exception)`.
   - `class QueenRouter(bookkeeping: Bookkeeping)`:
@@ -1212,8 +1212,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.router import QueenRouter, UnknownWorker
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.router import QueenRouter, UnknownWorker
 
 
 def _handler():
@@ -1276,16 +1276,16 @@ def test_format_ls_lists_active_with_ref_host_profile():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_router.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'fleetd.queen.router'`.
+Expected: FAIL — `ModuleNotFoundError: No module named 'skep.queen.router'`.
 
-- [ ] **Step 3: Write `src/fleetd/queen/router.py`**
+- [ ] **Step 3: Write `src/skep/queen/router.py`**
 
 ```python
 from __future__ import annotations
 
-from fleetd.formatting import escape_md
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.transport import CommandHandler
+from skep.formatting import escape_md
+from skep.queen.bookkeeping import Bookkeeping
+from skep.transport import CommandHandler
 
 
 class UnknownWorker(Exception):
@@ -1341,7 +1341,7 @@ Expected: PASS (7 passed).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/queen/router.py tests/test_router.py
+git add src/skep/queen/router.py tests/test_router.py
 git commit -m "feat: queen router — worker registry, spawn/kill/panic routing, /ls"
 ```
 
@@ -1350,7 +1350,7 @@ git commit -m "feat: queen router — worker registry, spawn/kill/panic routing,
 ## Task 9: App wiring (interim single-process) + command handlers + integration
 
 **Files:**
-- Modify: `src/fleetd/app.py`
+- Modify: `src/skep/app.py`
 - Test: `tests/test_integration.py`
 
 **Interfaces:**
@@ -1358,7 +1358,7 @@ git commit -m "feat: queen router — worker registry, spawn/kill/panic routing,
 - Produces:
   - `build_dispatcher(router: QueenRouter, config: QueenConfig) -> Dispatcher` — owner-gated handlers: `/spawn <host> [--profile <p>] <repo> <task>`, `/ls`, `/kill <ref>`, `/panic`.
   - `def parse_spawn(args: str) -> tuple[str, str, str, str] | None` — returns `(host, profile, repo, task)` or `None` if malformed. `--profile <p>` optional (default `"default"`).
-  - `async def main()` / `def run()` — wire QueenConfig + WorkerConfig from env, one queen + one worker over the in-memory transport, start polling. **Interim**: Plan 2 splits this into `fleetqueen`/`fleetd`.
+  - `async def main()` / `def run()` — wire QueenConfig + WorkerConfig from env, one queen + one worker over the in-memory transport, start polling. **Interim**: Plan 2 splits this into `skep-queen`/`skepd`.
 
 - [ ] **Step 1: Replace `tests/test_integration.py`**
 
@@ -1367,12 +1367,12 @@ import asyncio
 
 import pytest
 
-from fleetd.app import build_worker_and_router, parse_spawn
-from fleetd.config import QueenConfig, WorkerConfig
-from fleetd.db import Registry
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.router import QueenRouter
-from fleetd.queen.telegram_sink import QueenSink
+from skep.app import build_worker_and_router, parse_spawn
+from skep.config import QueenConfig, WorkerConfig
+from skep.db import Registry
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.router import QueenRouter
+from skep.queen.telegram_sink import QueenSink
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -1432,7 +1432,7 @@ async def test_end_to_end_spawn_with_fake_claude(tmp_path, git_repo, fake_claude
 Run: `uv run pytest tests/test_integration.py -v`
 Expected: FAIL — `ImportError: cannot import name 'build_worker_and_router'`.
 
-- [ ] **Step 3: Replace `src/fleetd/app.py`**
+- [ ] **Step 3: Replace `src/skep/app.py`**
 
 ```python
 from __future__ import annotations
@@ -1444,14 +1444,14 @@ from aiogram import Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from fleetd.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
-from fleetd.db import Registry
-from fleetd.queen.bookkeeping import Bookkeeping
-from fleetd.queen.router import QueenRouter, UnknownWorker
-from fleetd.queen.telegram_sink import QueenSink
-from fleetd.supervisor import CapacityError, Supervisor
-from fleetd.telegram_gw import Gateway, build_bot, is_owner
-from fleetd.transport import InMemoryEventSink
+from skep.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
+from skep.db import Registry
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.router import QueenRouter, UnknownWorker
+from skep.queen.telegram_sink import QueenSink
+from skep.supervisor import CapacityError, Supervisor
+from skep.telegram_gw import Gateway, build_bot, is_owner
+from skep.transport import InMemoryEventSink
 
 
 def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
@@ -1567,7 +1567,7 @@ Expected: PASS across all files. If `telegram_gw.py` referenced removed `Config`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fleetd/app.py tests/test_integration.py
+git add src/skep/app.py tests/test_integration.py
 git commit -m "feat: interim single-process wiring (queen+worker over in-memory transport)"
 ```
 

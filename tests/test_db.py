@@ -1,4 +1,4 @@
-from fleetd.db import Registry, Task
+from skep.db import Registry, Task
 
 
 def test_add_and_get_task():

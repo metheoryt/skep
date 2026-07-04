@@ -1,6 +1,6 @@
 import json
 
-from fleetd.stream import Event, parse_event
+from skep.stream import Event, parse_event
 
 
 def test_blank_line_returns_none():
