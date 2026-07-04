@@ -16,6 +16,7 @@
 - **Auth:** every Telegram update is rejected unless `from_user.id == config.owner_id`. No exceptions.
 - **Secrets:** bot token read from env (`FLEETD_BOT_TOKEN`); never written to disk or committed.
 - **Agent runtime:** `claude -p "<task>" --output-format stream-json --input-format stream-json`, cwd = a fresh git worktree per task.
+  > **Implementation note (final-review C1):** `--input-format stream-json` was **dropped for Phase 1**. Verified live against the real `claude`: with `--input-format stream-json` the process blocks reading its task from stdin until EOF, and fleetd (fire-and-forget in Phase 1) never writes/closes stdin → the agent hangs forever emitting no events. Phase 1 uses the one-shot form `claude -p "<task>" --output-format stream-json --verbose` with `stdin=DEVNULL`. `--input-format stream-json` + stdin writing returns in Phase 2 (soft-steer).
 - **Mode:** Phase 1 is `native` only (no sandbox).
 - **Cross-platform core:** modules under `src/fleetd/` make no OS-specific assumptions (no hardcoded paths, no systemd/Windows calls). Deployment wrappers are out of scope for this plan.
 - Bot must hold the `can_manage_topics` admin right in the group (operational precondition, documented in README).
