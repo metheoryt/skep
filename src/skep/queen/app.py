@@ -32,16 +32,17 @@ async def serve(qcfg: QueenConfig) -> None:
     bot, dp, app, _router = build_queen(qcfg)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, qcfg.listen_host, qcfg.listen_port)
-    await site.start()
 
     handle = None
-    if qcfg.advertise_mdns:
-        # advertise on the loopback/LAN address; a real deploy sets listen_host
-        adv_host = "127.0.0.1" if qcfg.listen_host in ("0.0.0.0", "") else qcfg.listen_host
-        handle = await advertise(adv_host, qcfg.listen_port,
-                                 public_url=qcfg.public_url)
     try:
+        site = web.TCPSite(runner, qcfg.listen_host, qcfg.listen_port)
+        await site.start()
+
+        if qcfg.advertise_mdns:
+            # advertise on the loopback/LAN address; a real deploy sets listen_host
+            adv_host = "127.0.0.1" if qcfg.listen_host in ("0.0.0.0", "") else qcfg.listen_host
+            handle = await advertise(adv_host, qcfg.listen_port,
+                                     public_url=qcfg.public_url)
         await dp.start_polling(bot)
     finally:
         if handle is not None:
