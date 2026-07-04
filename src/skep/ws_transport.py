@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aiohttp import web
@@ -8,6 +9,8 @@ from skep import wire
 from skep.auth import AuthError, handshake_server
 from skep.queen.router import QueenRouter
 from skep.transport import QueenInbox
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteWorker:
@@ -67,15 +70,20 @@ class QueenWsServer:
         profile = str(reg["profile"])
         self._router.register(host, profile, RemoteWorker(ws))
         self._router.mark_online(host, profile)
-        for t in reg.get("active_tasks", []):
-            await self._inbox.on_task_started(
-                host, profile, int(t["local_id"]), str(t["repo"]), str(t["title"]))
-
         try:
+            for t in reg.get("active_tasks", []):
+                await self._inbox.on_task_started(
+                    host, profile, int(t["local_id"]), str(t["repo"]), str(t["title"]))
+
             async for msg in ws:
                 if msg.type != web.WSMsgType.TEXT:
                     continue
-                await self._dispatch(host, profile, wire.decode(msg.data))
+                try:
+                    await self._dispatch(host, profile, wire.decode(msg.data))
+                except Exception:
+                    logger.exception(
+                        "error dispatching message from %s/%s: %r",
+                        host, profile, msg.data)
         finally:
             self._router.mark_offline(host, profile)
             self._router.unregister(host, profile)

@@ -99,6 +99,43 @@ async def test_register_makes_worker_routable():
         await server.close()
 
 
+class FlakyInbox(RecordingInbox):
+    """Inbox whose on_activity raises for a poisoned line, to exercise
+    the receive loop's per-message error isolation."""
+
+    async def on_activity(self, host, profile, local_id, line):
+        if line == "boom":
+            raise RuntimeError("rendering failed")
+        await super().on_activity(host, profile, local_id, line)
+
+
+async def test_dispatch_error_does_not_kill_connection():
+    inbox = FlakyInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.ws_connect(url) as ws:
+                await _client_handshake(ws)
+                await ws.send_str(wire.encode(
+                    wire.register_msg("g16", "work", "0.1.0", [])))
+                await ws.send_str(wire.encode(
+                    wire.task_started_msg(1, "nix", "clean")))
+                # this frame's handler raises — must not sever the socket
+                await ws.send_str(wire.encode(wire.activity_msg(1, "boom")))
+                # a well-formed frame afterwards must still be processed
+                await ws.send_str(wire.encode(wire.activity_msg(1, "still alive")))
+                for _ in range(100):
+                    if ("activity", "g16", "work", 1, "still alive") in inbox.events:
+                        break
+                    await asyncio.sleep(0.01)
+                assert not ws.closed
+    finally:
+        await server.close()
+    assert ("activity", "g16", "work", 1, "still alive") in inbox.events
+    assert not any(e[0] == "activity" and e[4] == "boom" for e in inbox.events)
+
+
 async def test_wrong_secret_is_rejected():
     inbox = RecordingInbox()
     router = QueenRouter(Bookkeeping.open(":memory:"))

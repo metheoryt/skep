@@ -53,6 +53,31 @@ async def test_edit_swallows_not_modified():
     await gw.edit(555, 9, "same text")
 
 
+async def test_post_to_general_topic_omits_thread_id():
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+    gw = Gateway(bot, _cfg())
+    mid = await gw.post(None, "hello")
+    assert mid == 1
+    # aiogram only drops message_thread_id from the outgoing request when the
+    # kwarg is None — a positive int (including 0) is sent verbatim and 400s
+    # against the General topic. Assert we pass None (never a truthy/0 value).
+    bot.send_message.assert_awaited_once_with(
+        chat_id=-1001, message_thread_id=None, text="hello"
+    )
+
+
+async def test_post_to_topic_still_passes_thread_id():
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=2))
+    gw = Gateway(bot, _cfg())
+    mid = await gw.post(555, "hello")
+    assert mid == 2
+    bot.send_message.assert_awaited_once_with(
+        chat_id=-1001, message_thread_id=555, text="hello"
+    )
+
+
 async def test_delete_topic_calls_bot():
     bot = MagicMock()
     bot.delete_forum_topic = AsyncMock()

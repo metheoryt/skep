@@ -33,7 +33,7 @@ class Gateway:
             chat_id=self._chat_id, message_thread_id=topic_id
         )
 
-    async def post(self, topic_id: int, text: str) -> int:
+    async def post(self, topic_id: int | None, text: str) -> int:
         msg = await self._bot.send_message(
             chat_id=self._chat_id, message_thread_id=topic_id, text=text
         )
