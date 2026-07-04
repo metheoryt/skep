@@ -6,9 +6,11 @@ from aiohttp.test_utils import TestServer
 import aiohttp
 
 from skep import wire
+from skep.config import WorkerConfig
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.router import QueenRouter
-from skep.ws_transport import QueenWsServer
+from skep.transport import SwitchableEventSink
+from skep.ws_transport import QueenWsServer, WorkerWsClient
 
 
 class RecordingInbox:
@@ -148,3 +150,93 @@ async def test_wrong_secret_is_rejected():
                     await _client_handshake(ws, secret="wrong")
     finally:
         await server.close()
+
+
+class FakeSupervisor:
+    """Stands in for Supervisor as a CommandHandler + list_active source."""
+
+    def __init__(self, capacity_ok=True):
+        self.spawned: list[tuple[str, str]] = []
+        self.killed: list[int] = []
+        self.panics = 0
+        self._capacity_ok = capacity_ok
+
+    def list_active(self):
+        return []
+
+    async def spawn(self, repo, task):
+        from skep.supervisor import CapacityError
+        if not self._capacity_ok:
+            raise CapacityError("at capacity (0 running)")
+        self.spawned.append((repo, task))
+        return 1
+
+    async def kill(self, task_id):
+        self.killed.append(task_id)
+        return True
+
+    async def panic(self):
+        self.panics += 1
+        return 0
+
+
+def _wcfg(url):
+    from pathlib import Path
+    return WorkerConfig(
+        host="g16", profile="work", claude_config_dir=None,
+        repos_root=Path("/tmp"), worktrees_root=Path("/tmp"),
+        db_path=":memory:", queen_url=url, shared_secret="s",
+    )
+
+
+async def test_worker_client_dispatches_spawn_command():
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor()
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s")
+    try:
+        async with aiohttp.ClientSession() as sess:
+            task = asyncio.create_task(client.run_once(sess, url))
+            # queen waits for the worker to register, then spawns
+            for _ in range(100):
+                try:
+                    await router.cmd_spawn("g16", "work", "nix", "clean")
+                    break
+                except Exception:
+                    await asyncio.sleep(0.01)
+            for _ in range(100):
+                if sup.spawned:
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+    finally:
+        await server.close()
+    assert sup.spawned == [("nix", "clean")]
+
+
+async def test_worker_client_reports_capacity_rejection():
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor(capacity_ok=False)
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s")
+    try:
+        async with aiohttp.ClientSession() as sess:
+            task = asyncio.create_task(client.run_once(sess, url))
+            for _ in range(100):
+                try:
+                    await router.cmd_spawn("g16", "work", "nix", "clean")
+                    break
+                except Exception:
+                    await asyncio.sleep(0.01)
+            for _ in range(100):
+                if any(e[0] == "spawn_rejected" for e in inbox.events):
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+    finally:
+        await server.close()
+    assert any(e[0] == "spawn_rejected" for e in inbox.events)
