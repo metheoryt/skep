@@ -1,3 +1,15 @@
+"""Mutual HMAC challenge-response handshake.
+
+Wire protocol (4 frames, JSON dicts with a ``"t"`` discriminator):
+
+- ``challenge``  (server -> client): ``{"t": "challenge", "nonce": <server_nonce>}``
+- ``auth``       (client -> server): ``{"t": "auth", "nonce": <client_nonce>, "proof": <hmac>}``
+- ``auth_ok``    (server -> client): ``{"t": "auth_ok", "proof": <hmac>}`` on success
+- ``auth_error`` (server -> client): ``{"t": "auth_error"}`` sent before the server
+  raises ``AuthError``, so the client (blocked on ``recv()``) is unblocked instead
+  of deadlocking, e.g. under ``asyncio.gather(..., return_exceptions=True)``.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -27,6 +39,7 @@ async def handshake_server(
     await send({"t": "challenge", "nonce": server_nonce})
     msg = await recv()
     if msg.get("t") != "auth":
+        await send({"t": "auth_error"})
         raise AuthError("expected auth frame")
     client_nonce = str(msg.get("nonce", ""))
     expected = _proof(secret, server_nonce, client_nonce)

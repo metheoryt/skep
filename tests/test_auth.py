@@ -93,3 +93,37 @@ async def test_replayed_client_proof_is_rejected():
     with pytest.raises(AuthError):
         await handshake_server(s2_send, s2_recv, "secret",
                                nonce_factory=lambda: "N2")
+    assert any(m.get("t") == "auth_error" for m in sent)
+
+
+async def test_client_raises_on_auth_error_frame():
+    # Server sends a valid challenge, then an auth_error instead of auth_ok.
+    calls = [0]
+
+    async def c_recv():
+        calls[0] += 1
+        if calls[0] == 1:
+            return {"t": "challenge", "nonce": "N1"}
+        return {"t": "auth_error"}
+
+    async def c_send(m):
+        pass
+
+    with pytest.raises(AuthError):
+        await handshake_client(c_send, c_recv, "secret",
+                               nonce_factory=lambda: "CN")
+
+
+async def test_server_rejects_malformed_auth_frame_and_notifies():
+    sent: list = []
+
+    async def s_send(m):
+        sent.append(m)
+
+    async def s_recv():
+        return {"t": "not-auth"}
+
+    with pytest.raises(AuthError):
+        await handshake_server(s_send, s_recv, "secret",
+                               nonce_factory=lambda: "N1")
+    assert any(m.get("t") == "auth_error" for m in sent)
