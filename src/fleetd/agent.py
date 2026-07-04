@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
 from pathlib import Path
 from typing import AsyncIterator
 
 from fleetd.stream import Event, parse_event
+
+
+def _agent_env(config_dir: str | None) -> dict[str, str]:
+    env = dict(os.environ)
+    if config_dir is not None:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+    return env
 
 
 def create_worktree(repo_path: Path, worktree_path: Path, branch: str) -> None:
@@ -20,10 +28,12 @@ def create_worktree(repo_path: Path, worktree_path: Path, branch: str) -> None:
 
 
 class AgentProcess:
-    def __init__(self, task_text: str, cwd: Path, claude_bin: str):
+    def __init__(self, task_text: str, cwd: Path, claude_bin: str,
+                 config_dir: str | None = None):
         self._task_text = task_text
         self._cwd = cwd
         self._claude_bin = claude_bin
+        self._config_dir = config_dir
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr: bytes = b""
         self._stderr_task: asyncio.Task | None = None
@@ -59,6 +69,7 @@ class AgentProcess:
         self._proc = await asyncio.create_subprocess_exec(
             *self._argv(),
             cwd=str(self._cwd),
+            env=_agent_env(self._config_dir),
             # Phase 1 writes no stdin; DEVNULL gives immediate EOF, avoiding
             # claude's 3s "no stdin data" stall. Phase 2 (soft-steer) will
             # need PIPE to write follow-up input.

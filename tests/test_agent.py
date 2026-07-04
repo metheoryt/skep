@@ -1,7 +1,20 @@
 import pytest
 
-from fleetd.agent import AgentProcess, create_worktree
+from fleetd.agent import AgentProcess, _agent_env, create_worktree
 from fleetd.stream import Event
+
+
+def test_agent_env_injects_config_dir(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = _agent_env("/home/me/.claude-work")
+    assert env["CLAUDE_CONFIG_DIR"] == "/home/me/.claude-work"
+    assert env["PATH"] == "/usr/bin"  # base env preserved
+
+
+def test_agent_env_none_leaves_config_dir_unset(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    env = _agent_env(None)
+    assert "CLAUDE_CONFIG_DIR" not in env
 
 
 def test_create_worktree_makes_a_new_branch(git_repo, tmp_path):
