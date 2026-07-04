@@ -25,6 +25,8 @@ class AgentProcess:
         self._cwd = cwd
         self._claude_bin = claude_bin
         self._proc: asyncio.subprocess.Process | None = None
+        self._stderr: bytes = b""
+        self._stderr_task: asyncio.Task | None = None
 
     @property
     def pid(self) -> int | None:
@@ -36,18 +38,35 @@ class AgentProcess:
         return [
             *base, "-p", self._task_text,
             "--output-format", "stream-json",
-            "--input-format", "stream-json",
+            # --input-format stream-json is Phase 2 (soft-steer); Phase 1 is one-shot via -p
             "--verbose",
         ]
 
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode if self._proc else None
+
+    @property
+    def stderr_text(self) -> str:
+        return self._stderr.decode(errors="replace")
+
+    async def _drain_stderr(self) -> None:
+        assert self._proc is not None and self._proc.stderr is not None
+        self._stderr = await self._proc.stderr.read()
+
     async def start(self) -> None:
+        self._stderr = b""
         self._proc = await asyncio.create_subprocess_exec(
             *self._argv(),
             cwd=str(self._cwd),
-            stdin=asyncio.subprocess.PIPE,
+            # Phase 1 writes no stdin; DEVNULL gives immediate EOF, avoiding
+            # claude's 3s "no stdin data" stall. Phase 2 (soft-steer) will
+            # need PIPE to write follow-up input.
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
 
     async def events(self) -> AsyncIterator[Event]:
         assert self._proc is not None and self._proc.stdout is not None
@@ -56,6 +75,8 @@ class AgentProcess:
             if ev is not None:
                 yield ev
         await self._proc.wait()
+        if self._stderr_task is not None:
+            await self._stderr_task
 
     async def kill(self) -> None:
         if self._proc and self._proc.returncode is None:

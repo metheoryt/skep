@@ -37,17 +37,22 @@ class Supervisor:
         worktree_path = self._cfg.worktrees_root / f"{repo}-{tid}"
         self._reg.update(tid, worktree_path=str(worktree_path))
 
-        self._worktree_factory(repo_path, worktree_path, branch)
-        topic_id = await self._gw.create_topic(f"{repo} · {_slug(task_text)}")
-        self._reg.update(tid, topic_id=topic_id)
-        self._reg.log_audit(tid, "spawn", f"{repo}: {task_text}")
+        try:
+            self._worktree_factory(repo_path, worktree_path, branch)
+            topic_id = await self._gw.create_topic(f"{repo} · {_slug(task_text)}")
+            self._reg.update(tid, topic_id=topic_id)
+            self._reg.log_audit(tid, "spawn", f"{repo}: {task_text}")
 
-        agent = self._agent_factory(
-            task_text=task_text, cwd=worktree_path, claude_bin=self._cfg.claude_bin
-        )
-        await agent.start()
-        self._agents[tid] = agent
-        self._reg.update(tid, status="running", pid=agent.pid)
+            agent = self._agent_factory(
+                task_text=task_text, cwd=worktree_path, claude_bin=self._cfg.claude_bin
+            )
+            await agent.start()
+            self._agents[tid] = agent
+            self._reg.update(tid, status="running", pid=agent.pid)
+        except Exception as exc:
+            self._reg.update(tid, status="failed")
+            self._reg.log_audit(tid, "error", f"spawn failed: {exc}")
+            raise
 
         task = asyncio.create_task(self.run_events(tid, agent))
         self._tasks.add(task)
@@ -58,11 +63,13 @@ class Supervisor:
         topic_id = self._reg.get_task(task_id).topic_id
         activity_msg_id: int | None = None
         terminal = "done"
+        saw_result = False
         try:
             async for ev in agent.events():
                 if ev.kind == "system" and ev.session_id:
                     self._reg.update(task_id, session_id=ev.session_id)
                 if ev.kind == "result":
+                    saw_result = True
                     self._reg.update(task_id, session_id=ev.session_id or
                                      self._reg.get_task(task_id).session_id)
                     terminal = "failed" if ev.is_error else "done"
@@ -77,6 +84,14 @@ class Supervisor:
                 milestone = milestone_message(ev)
                 if milestone is not None:
                     await self._gw.post(topic_id, milestone)
+
+            if not saw_result:
+                terminal = "failed"
+                self._reg.log_audit(
+                    task_id, "error",
+                    f"agent exited without result (rc={agent.returncode}): "
+                    f"{agent.stderr_text[-500:]}",
+                )
         except Exception as exc:
             terminal = "failed"
             self._reg.log_audit(task_id, "error", f"run_events crashed: {exc}")

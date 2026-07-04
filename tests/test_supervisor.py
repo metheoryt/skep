@@ -19,6 +19,8 @@ class FakeAgent:
         self.pid = 123
         self.killed = False
         self.started = False
+        self.returncode = 1
+        self.stderr_text = "boom"
 
     async def start(self):
         self.started = True
@@ -181,6 +183,47 @@ async def test_run_events_preserves_killed_status(tmp_path):
     await sup.run_events(tid, agent)
 
     assert reg.get_task(tid).status == "killed"
+
+
+async def test_run_events_no_result_marks_failed(tmp_path):
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    gw = _gateway()
+    events = [Event(kind="system", session_id="s9")]
+    agent = FakeAgent(events)
+    sup = Supervisor(cfg, reg, gw,
+                     agent_factory=lambda **k: agent,
+                     worktree_factory=lambda *a, **k: None)
+    tid = reg.add_task("nix", "t", str(tmp_path / "wt"))
+    reg.update(tid, topic_id=555)
+
+    await sup.run_events(tid, agent)
+
+    assert reg.get_task(tid).status == "failed"
+
+
+async def test_spawn_worktree_failure_marks_failed_and_raises(tmp_path):
+    cfg = _cfg(tmp_path)
+    (cfg.repos_root).mkdir(parents=True)
+    reg = Registry.open(":memory:")
+    gw = _gateway()
+
+    def wt_factory(repo_path, worktree_path, branch):
+        raise RuntimeError("not a git repo")
+
+    sup = Supervisor(cfg, reg, gw,
+                     agent_factory=lambda **k: FakeAgent([]),
+                     worktree_factory=wt_factory)
+
+    with pytest.raises(RuntimeError):
+        await sup.spawn("nix", "clean nvidia")
+
+    rows = reg.audit_rows()
+    assert any(r["kind"] == "error" for r in rows)
+    # find the task id from audit rows / list_active isn't reliable since
+    # status is failed (not active); look it up via the last added task.
+    tasks = [reg.get_task(r["task_id"]) for r in rows if r["kind"] == "error"]
+    assert any(t is not None and t.status == "failed" for t in tasks)
 
 
 async def test_run_events_activity_posts_once_then_edits(tmp_path):

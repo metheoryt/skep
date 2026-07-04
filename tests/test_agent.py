@@ -26,3 +26,11 @@ async def test_agent_kill_stops_process(tmp_path, fake_claude_cmd):
     await agent.kill()
     # draining events after kill must not hang
     _ = [ev async for ev in agent.events()]
+
+
+def test_argv_omits_input_format_for_phase1(tmp_path):
+    agent = AgentProcess(task_text="t", cwd=tmp_path, claude_bin="claude")
+    argv = agent._argv()
+    assert "--input-format" not in argv
+    assert "--output-format" in argv
+    assert "stream-json" in argv
