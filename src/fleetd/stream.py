@@ -15,7 +15,7 @@ class Event:
 
 
 def _first_blocks(obj: dict) -> list[dict]:
-    content = obj.get("message", {}).get("content", [])
+    content = (obj.get("message") or {}).get("content", [])
     return content if isinstance(content, list) else []
 
 

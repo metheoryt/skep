@@ -65,3 +65,23 @@ def test_result_event_captures_error_and_session():
 def test_unknown_type_is_unknown_kind():
     ev = parse_event(json.dumps({"type": "weird"}))
     assert ev.kind == "unknown"
+
+
+def test_assistant_message_null_does_not_crash():
+    line = json.dumps({"type": "assistant", "message": None})
+    ev = parse_event(line)
+    assert ev is not None
+    assert ev.kind == "unknown"
+
+
+def test_user_message_null_does_not_crash():
+    line = json.dumps({"type": "user", "message": None})
+    ev = parse_event(line)
+    assert ev is not None
+    assert ev.kind == "unknown"
+
+
+def test_non_dict_json_returns_none():
+    assert parse_event("[1,2,3]") is None
+    assert parse_event("42") is None
+    assert parse_event("\"hi\"") is None
