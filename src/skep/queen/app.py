@@ -36,6 +36,10 @@ def build_queen(qcfg: QueenConfig) -> tuple[Bot, Dispatcher, web.Application, Qu
 
 
 async def serve(qcfg: QueenConfig) -> None:
+    if not qcfg.shared_secret.strip():
+        raise SystemExit(
+            "SKEP_SHARED_SECRET is required (worker<->queen auth); "
+            "refusing to start without it")
     bot, dp, app, _router = build_queen(qcfg)
     runner = web.AppRunner(app)
     await runner.setup()

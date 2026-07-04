@@ -75,12 +75,19 @@ class QueenWsServer:
 
         host = str(reg["host"])
         profile = str(reg["profile"])
-        self._router.register(host, profile, RemoteWorker(ws))
+        remote = RemoteWorker(ws)
+        self._router.register(host, profile, remote)
         self._router.mark_online(host, profile)
         try:
             for t in reg.get("active_tasks", []):
-                await self._inbox.on_task_started(
-                    host, profile, int(t["local_id"]), str(t["repo"]), str(t["title"]))
+                try:
+                    await self._inbox.on_task_started(
+                        host, profile, int(t["local_id"]), str(t["repo"]), str(t["title"]))
+                except Exception:
+                    logger.exception(
+                        "error replaying active task from %s/%s: %r",
+                        host, profile, t)
+                    continue
 
             async for msg in ws:
                 if msg.type != web.WSMsgType.TEXT:
@@ -92,8 +99,7 @@ class QueenWsServer:
                         "error dispatching message from %s/%s: %r",
                         host, profile, msg.data)
         finally:
-            self._router.mark_offline(host, profile)
-            self._router.unregister(host, profile)
+            self._router.detach_if_current(host, profile, remote)
         return ws
 
     async def _dispatch(self, host: str, profile: str,
@@ -218,8 +224,8 @@ class WorkerWsClient:
                     url = self._cfg.queen_url or ""
                     await self.run_once(session, url)
                 backoff = 0.5  # clean close -> reset
-            except (aiohttp.ClientError, ConnectionError, AuthError, OSError):
-                pass
+            except (aiohttp.ClientError, ConnectionError, AuthError, OSError) as exc:
+                logger.warning("queen connection failed, will retry: %r", exc)
             if _once:
                 return
             await asyncio.sleep(backoff)

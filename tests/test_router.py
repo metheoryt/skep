@@ -72,6 +72,28 @@ def test_presence_online_offline_touch():
     assert r.is_online("g16", "work") is False
 
 
+def test_detach_if_current_ignores_stale_handler():
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    a, b = _handler(), _handler()
+    # A registers and comes online.
+    router.register("g16", "work", a)
+    router.mark_online("g16", "work")
+    # Reconnect: B replaces A in the registry (simulating a live reconnect
+    # racing A's slow-to-notice drop) and comes online too.
+    router.register("g16", "work", b)
+    router.mark_online("g16", "work")
+
+    # A's belated cleanup must be a no-op: B is still the live handler.
+    assert router.detach_if_current("g16", "work", a) is False
+    assert router.is_online("g16", "work") is True
+    assert router._workers[("g16", "work")] is b
+
+    # B's own cleanup does detach, since B is still current.
+    assert router.detach_if_current("g16", "work", b) is True
+    assert router.is_online("g16", "work") is False
+    assert ("g16", "work") not in router._workers
+
+
 async def test_format_ls_marks_detached():
     bk = Bookkeeping.open(":memory:")
     bk.add("g16", "work", 1, "nix", "clean", topic_id=5)

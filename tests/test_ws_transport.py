@@ -138,6 +138,46 @@ async def test_dispatch_error_does_not_kill_connection():
     assert not any(e[0] == "activity" and e[4] == "boom" for e in inbox.events)
 
 
+class PoisonedReplayInbox(RecordingInbox):
+    """Inbox whose on_task_started raises for a poisoned reconnect-replay
+    entry, to exercise the register-time active_tasks replay loop's
+    per-item error isolation (mirrors FlakyInbox for steady-state)."""
+
+    async def on_task_started(self, host, profile, local_id, repo, title):
+        if repo == "poison":
+            raise RuntimeError("replay failed")
+        await super().on_task_started(host, profile, local_id, repo, title)
+
+
+async def test_reattach_replay_error_does_not_kill_connection():
+    inbox = PoisonedReplayInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.ws_connect(url) as ws:
+                await _client_handshake(ws)
+                # register frame carries an active_tasks entry that makes
+                # on_task_started raise during reconnect replay
+                await ws.send_str(wire.encode(
+                    wire.register_msg("g16", "work", "0.1.0", [
+                        {"local_id": 1, "repo": "poison", "title": "bad"},
+                    ])))
+                # a well-formed steady-state frame afterwards must still be
+                # processed — the poisoned replay must not sever the socket
+                await ws.send_str(wire.encode(
+                    wire.task_started_msg(2, "nix", "clean")))
+                for _ in range(100):
+                    if ("task_started", "g16", "work", 2, "nix", "clean") in inbox.events:
+                        break
+                    await asyncio.sleep(0.01)
+                assert not ws.closed
+    finally:
+        await server.close()
+    assert ("task_started", "g16", "work", 2, "nix", "clean") in inbox.events
+    assert not any(e[0] == "task_started" and e[4] == "poison" for e in inbox.events)
+
+
 async def test_wrong_secret_is_rejected():
     inbox = RecordingInbox()
     router = QueenRouter(Bookkeeping.open(":memory:"))

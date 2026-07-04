@@ -23,6 +23,34 @@ def test_build_queen_wires_ws_route():
     assert dp is not None
 
 
+async def test_serve_refuses_empty_shared_secret_before_any_io(monkeypatch):
+    """Fail closed: an empty SKEP_SHARED_SECRET must abort serve() before
+    any socket is bound, so a forgotten secret never yields an
+    unauthenticated, internet-bindable port."""
+    qcfg = _qcfg(shared_secret="")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("serve() attempted network I/O despite empty secret")
+
+    monkeypatch.setattr(queen_app, "build_queen", _boom)
+    monkeypatch.setattr(web.AppRunner, "setup", _boom)
+
+    with pytest.raises(SystemExit, match="SKEP_SHARED_SECRET"):
+        await serve(qcfg)
+
+
+async def test_serve_refuses_whitespace_only_shared_secret(monkeypatch):
+    qcfg = _qcfg(shared_secret="   ")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("serve() attempted network I/O despite blank secret")
+
+    monkeypatch.setattr(queen_app, "build_queen", _boom)
+
+    with pytest.raises(SystemExit, match="SKEP_SHARED_SECRET"):
+        await serve(qcfg)
+
+
 async def test_serve_cleans_up_runner_when_site_start_fails(monkeypatch):
     """Regression test: if site.start() (or mDNS advertise) raises during
     startup, the AppRunner set up just before it must still be cleaned up

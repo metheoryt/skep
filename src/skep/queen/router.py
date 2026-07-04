@@ -27,6 +27,20 @@ class QueenRouter:
     def unregister(self, host: str, profile: str) -> None:
         self._workers.pop((host, profile), None)
 
+    def detach_if_current(self, host: str, profile: str,
+                           handler: CommandHandler) -> bool:
+        """Unregister+mark-offline only if `handler` is still the live one.
+
+        Guards against a reconnect race: an old connection's cleanup must
+        not clobber a newer connection that already replaced it in the
+        registry (see ws_transport.QueenWsServer._handle).
+        """
+        if self._workers.get((host, profile)) is not handler:
+            return False
+        self.mark_offline(host, profile)
+        self._workers.pop((host, profile), None)
+        return True
+
     def mark_online(self, host: str, profile: str) -> None:
         self._online.add((host, profile))
         self._last_seen[(host, profile)] = self._now()

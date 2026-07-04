@@ -22,6 +22,10 @@ def build_worker(wcfg: WorkerConfig) -> tuple[Supervisor, SwitchableEventSink, W
 
 
 async def serve(wcfg: WorkerConfig) -> None:
+    if not wcfg.shared_secret.strip():
+        raise SystemExit(
+            "SKEP_SHARED_SECRET is required (worker<->queen auth); "
+            "refusing to start without it")
     url = await resolve_queen_url(wcfg)
     if url is None:
         raise SystemExit(
