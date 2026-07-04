@@ -144,8 +144,8 @@ True instant mid-tool interrupt of a headless CLI is limited. Two real levers:
 ## 6. Tech stack
 
 - **Language:** Python 3.13 + asyncio (fits the pipe-juggling; matches existing
-  uv toolchain). Telegram: `aiogram` or `python-telegram-bot` (long-polling).
-  MCP: official Python MCP SDK for the `human-loop` server.
+  uv toolchain). Telegram: **`aiogram`** (long-polling). MCP: official Python
+  MCP SDK for the `human-loop` server.
 - **Persistence:** SQLite.
 - **Packaging/deploy:**
   - Core: pure Python, no OS assumptions.
