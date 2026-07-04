@@ -147,8 +147,23 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   re-attach replay loop (→ per-item try/except). DEFERRED follow-ups (not blocking,
   logged): wedged-worker liveness eviction (§6.4 K-overdue sweeper — only transport
   ping/pong exists today); `wire.LS_REPLY`/`LS_REQUEST` are unused (no live `/ls` query
-  path — `/ls` reads bookkeeping); minor test-hygiene nits. **Next step: resolve the L0
-  MCP-shim spike (spec §15), then build L0 Mailbox.**
+  path — `/ls` reads bookkeeping); minor test-hygiene nits.
+  **L0 MCP-shim spike RESOLVED 2026-07-05** — doc
+  `docs/superpowers/specs/2026-07-05-l0-mcp-shim-spike.md`. Decisions (verified vs
+  `claude` 2.1.201): shim = **in-worker-process streamable-HTTP MCP server** on
+  `127.0.0.1` (NOT stdio — stdio would be an agent-child with no handle to the seam),
+  **one server per worker** multiplexed by a **per-agent bearer token** (token→tid
+  map; enforces §11 spoof-proof `from`), injected via `--mcp-config '<inline JSON>'`
+  at spawn WITHOUT `--strict-mcp-config` (agent keeps profile MCP e.g. gortex). Bind
+  to **worker-local `tid`** (sync at spawn), NOT queen `ref` (async/fire-and-forget);
+  queen resolves `from`→ref via existing bookkeeping. THE REAL NEW MACHINERY: the seam
+  is fire-and-forget both ways but mailbox tools are **request/reply** → add a `req_id`
+  + `dict[req_id,Future]` correlation layer on the WS (new frames `mailbox_send`/
+  `mailbox_ack`/`inbox_read`/`inbox_reply`); persist-before-ack; **L1 memory reuses
+  this exact layer**. Link-down → shim returns retryable error (never hangs). fake_claude
+  CAN'T call MCP → real tool round-trip is integration/manual; unit-test shim handlers +
+  seam req/reply directly. Defaults: 20/min, depth 10, dedupe 60s, body 16KB, pure-pull
+  inbox. **Next step: build L0 Mailbox (spec `2026-07-05-l0-mailbox-design.md`, TDD).**
   Two execution gotchas from Plan 2 (kept for reference): (a) the plan
   predated this repo's pyright governance, so plan-faithful rewrites regressed
   `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
@@ -281,8 +296,9 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     MCP shim + agent↔`ref` binding, spec §15). **Build order: Phase 2 Plan 1 (the
     seam) — DONE; Plan 2 (real WS transport) — DONE + merged 2026-07-05; then resolve
     the shim spike as L0's first task, then build L0.** The mailbox brainstorm ran ahead
-    of the build sequence — that's fine, the design is banked; the next EXECUTABLE
-    step is now the L0 MCP-shim spike, then L0 Mailbox.
+    of the build sequence — that's fine, the design is banked. Shim spike RESOLVED
+    2026-07-05 (see the Plan-2-executed bullet + `2026-07-05-l0-mcp-shim-spike.md`);
+    the next EXECUTABLE step is now building L0 Mailbox (TDD).
 
 - **Usage-limit handling = PARK & RESUME (recorded 2026-07-05).** The `claude` CLI
   has NO native pause/resume: on a Pro/Max plan usage-limit hit it "blocks further
