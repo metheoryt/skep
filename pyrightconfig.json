@@ -1,0 +1,59 @@
+// Pyright config tuned for GORTEX RESOLUTION QUALITY (see cyphy:gortex-align).
+//
+// Gortex's Python resolver is the native, type-aware python-types provider;
+// pyright is NOT in that path, but the annotations/stubs it forces you to add
+// feed the native provider, so "align for gortex" == "resolve cleanly under
+// pyright." (A) knobs change what resolves; (B) diagnostics flag thin-type
+// spots that would otherwise become weak text_matched edges.
+{
+  // ---- (A) RESOLUTION KNOBS ------------------------------------------------
+
+  // Pin to the declared floor (pyproject requires-python = ">=3.13"). The local
+  // .venv is 3.14, but 3.13 is the compatibility contract this code targets.
+  "pythonVersion": "3.13",
+
+  // The venv where deps (aiogram) are installed.
+  "venvPath": ".",
+  "venv": ".venv",
+
+  "include": ["src", "tests"],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv",
+    "build",
+    "dist"
+  ],
+
+  // Infer types from a dependency's source when it ships no stubs.
+  "useLibraryCodeForTypes": true,
+
+  // Baseline preset; ratchet to "strict" once the gaps below are paid down.
+  "typeCheckingMode": "standard",
+
+  // ---- (B) GAP DIAGNOSTICS -------------------------------------------------
+
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "warning",
+  "reportMissingTypeStubs": "warning",
+  "reportAttributeAccessIssue": "error",
+
+  "reportMissingParameterType": "error",
+  "reportUntypedBaseClass": "error",
+  "reportUntypedNamedTuple": "error",
+  "reportUntypedFunctionDecorator": "warning",
+  "reportUntypedClassDecorator": "warning",
+
+  "reportUnknownParameterType": "warning",
+  "reportUnknownArgumentType": "warning",
+  "reportUnknownVariableType": "warning",
+  "reportUnknownMemberType": "warning",
+  "reportUnknownLambdaType": "warning",
+
+  "reportAny": "warning",
+  "reportExplicitAny": "warning",
+
+  "reportPrivateImportUsage": "warning",
+  "reportWildcardImportFromLibrary": "warning",
+  "reportImplicitOverride": "warning"
+}
