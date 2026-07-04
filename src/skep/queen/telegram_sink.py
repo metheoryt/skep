@@ -42,3 +42,8 @@ class QueenSink:
         if entry is None:
             return
         self._bk.set_status(entry.ref, status)
+
+    async def on_spawn_rejected(self, host: str, profile: str,
+                                reason: str) -> None:
+        text = escape_md(f"spawn on {host}/{profile} rejected: {reason}")
+        await self._gw.post(0, text)

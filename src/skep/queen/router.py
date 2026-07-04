@@ -17,6 +17,15 @@ class QueenRouter:
     def register(self, host: str, profile: str, handler: CommandHandler) -> None:
         self._workers[(host, profile)] = handler
 
+    def unregister(self, host: str, profile: str) -> None:
+        self._workers.pop((host, profile), None)
+
+    def mark_online(self, host: str, profile: str) -> None: ...
+
+    def mark_offline(self, host: str, profile: str) -> None: ...
+
+    def touch(self, host: str, profile: str) -> None: ...
+
     async def cmd_spawn(self, host: str, profile: str, repo: str, task: str) -> None:
         handler = self._workers.get((host, profile))
         if handler is None:
