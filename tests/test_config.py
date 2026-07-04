@@ -75,3 +75,47 @@ def test_queen_missing_token_raises():
     del env["SKEP_BOT_TOKEN"]
     with pytest.raises(KeyError):
         load_queen_config(env)
+
+
+def test_queen_config_network_defaults():
+    cfg = load_queen_config(_queen_env())
+    assert cfg.listen_host == "0.0.0.0"
+    assert cfg.listen_port == 8765
+    assert cfg.shared_secret == ""
+    assert cfg.public_url is None
+    assert cfg.advertise_mdns is True
+
+
+def test_queen_config_network_overrides():
+    env = _queen_env() | {
+        "SKEP_LISTEN_HOST": "10.0.0.2",
+        "SKEP_LISTEN_PORT": "9000",
+        "SKEP_SHARED_SECRET": "s3cr3t",
+        "SKEP_PUBLIC_URL": "wss://skep.cyphy.kz/ws",
+        "SKEP_ADVERTISE_MDNS": "false",
+    }
+    cfg = load_queen_config(env)
+    assert cfg.listen_host == "10.0.0.2"
+    assert cfg.listen_port == 9000
+    assert cfg.shared_secret == "s3cr3t"
+    assert cfg.public_url == "wss://skep.cyphy.kz/ws"
+    assert cfg.advertise_mdns is False
+
+
+def test_worker_config_transport_defaults():
+    cfg = load_worker_config(_worker_env())
+    assert cfg.queen_url is None
+    assert cfg.shared_secret == ""
+    assert cfg.use_mdns is True
+
+
+def test_worker_config_transport_overrides():
+    env = _worker_env() | {
+        "SKEP_QUEEN_URL": "wss://skep.cyphy.kz/ws",
+        "SKEP_SHARED_SECRET": "s3cr3t",
+        "SKEP_USE_MDNS": "0",
+    }
+    cfg = load_worker_config(env)
+    assert cfg.queen_url == "wss://skep.cyphy.kz/ws"
+    assert cfg.shared_secret == "s3cr3t"
+    assert cfg.use_mdns is False
