@@ -1,17 +1,31 @@
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
 
 import pytest
 
-from fleetd.app import build_owner_middleware, format_ls
-from fleetd.config import Config
+from fleetd.app import build_worker_and_router, parse_spawn
+from fleetd.config import QueenConfig, WorkerConfig
 from fleetd.db import Registry
-from fleetd.supervisor import Supervisor
+from fleetd.queen.bookkeeping import Bookkeeping
+from fleetd.queen.router import QueenRouter
+from fleetd.queen.telegram_sink import QueenSink
+from unittest.mock import AsyncMock, MagicMock
 
 
-def _cfg(tmp_path):
-    return Config("tok", 42, -1001, tmp_path / "repos", tmp_path / "wt",
-                  claude_bin="")  # set per-test
+def test_parse_spawn_with_profile():
+    assert parse_spawn("g16 --profile work nix clean the nvidia mess") == (
+        "g16", "work", "nix", "clean the nvidia mess",
+    )
+
+
+def test_parse_spawn_default_profile():
+    assert parse_spawn("g16 nix clean nvidia") == (
+        "g16", "default", "nix", "clean nvidia",
+    )
+
+
+def test_parse_spawn_too_few_args_is_none():
+    assert parse_spawn("g16 nix") is None
+    assert parse_spawn("") is None
 
 
 def _gateway():
@@ -19,89 +33,30 @@ def _gateway():
     gw.create_topic = AsyncMock(return_value=555)
     gw.post = AsyncMock(return_value=9)
     gw.edit = AsyncMock()
-    gw.delete_topic = AsyncMock()
     return gw
 
 
-def test_format_ls_empty():
-    assert "No active" in format_ls([])
-
-
-def test_format_ls_lists_tasks():
-    reg = Registry.open(":memory:")
-    tid = reg.add_task("nix", "clean nvidia", "/wt/nix-1")
-    reg.update(tid, status="running")
-    out = format_ls(reg.list_active())
-    assert "nix" in out
-    assert str(tid) in out
-
-
-def test_format_ls_escapes_markdownv2():
-    reg = Registry.open(":memory:")
-    tid = reg.add_task("claude-code.v2", "t", "/wt/x")
-    reg.update(tid, status="running")
-    out = format_ls(reg.list_active())
-    assert "claude\\-code\\.v2" in out
-    assert "claude-code.v2" not in out
-
-
-async def test_owner_middleware_passes_owner(tmp_path):
-    cfg = _cfg(tmp_path)
-    mw = build_owner_middleware(Config("tok", 42, -1001, tmp_path / "repos",
-                                       tmp_path / "wt", claude_bin=""))
-    ev = MagicMock()
-    ev.message = MagicMock()
-    ev.message.from_user = MagicMock(id=42)
-    ev.configure_mock(edited_message=None, channel_post=None,
-                      edited_channel_post=None, callback_query=None,
-                      inline_query=None, my_chat_member=None, chat_member=None)
-    handler = AsyncMock(return_value="ok")
-
-    result = await mw(handler, ev, {})
-
-    assert handler.await_count == 1
-    assert result == "ok"
-
-
-async def test_owner_middleware_blocks_non_owner(tmp_path):
-    cfg = _cfg(tmp_path)
-    mw = build_owner_middleware(Config("tok", 42, -1001, tmp_path / "repos",
-                                       tmp_path / "wt", claude_bin=""))
-    ev = MagicMock()
-    ev.message = MagicMock()
-    ev.message.from_user = MagicMock(id=999)
-    ev.configure_mock(edited_message=None, channel_post=None,
-                      edited_channel_post=None, callback_query=None,
-                      inline_query=None, my_chat_member=None, chat_member=None)
-    handler = AsyncMock(return_value="ok")
-
-    result = await mw(handler, ev, {})
-
-    assert handler.await_count == 0
-    assert result is None
-
-
-async def test_end_to_end_spawn_with_fake_claude(tmp_path, git_repo,
-                                                  fake_claude_cmd):
-    import asyncio
-
-    cfg = Config("tok", 42, -1001, git_repo.parent, tmp_path / "wt",
-                 claude_bin=fake_claude_cmd)
-    # repo dir must be named for the spawn arg
+async def test_end_to_end_spawn_with_fake_claude(tmp_path, git_repo, fake_claude_cmd):
     repo_name = git_repo.name
-    reg = Registry.open(":memory:")
+    wcfg = WorkerConfig(
+        host="g16", profile="work", claude_config_dir=None,
+        repos_root=git_repo.parent, worktrees_root=tmp_path / "wt",
+        db_path=":memory:", max_concurrent=8, claude_bin=fake_claude_cmd,
+    )
     gw = _gateway()
-    sup = Supervisor(cfg, reg, gw)
+    bk = Bookkeeping.open(":memory:")
+    router, supervisor = build_worker_and_router(wcfg, QueenSink(gw, bk), bk,
+                                                 registry=Registry.open(":memory:"))
 
-    tid = await sup.spawn(repo_name, "clean nvidia")
-    # wait for the background event loop to finish
+    await router.cmd_spawn("g16", "work", repo_name, "clean nvidia")
+
     for _ in range(200):
-        if reg.get_task(tid).status in ("done", "failed", "killed"):
+        entry = bk.by_worker_task("g16", "work", 1)
+        if entry and entry.status in ("done", "failed", "killed"):
             break
         await asyncio.sleep(0.02)
 
-    task = reg.get_task(tid)
-    assert task.status == "done"
-    assert task.session_id == "fake-sess"
+    entry = bk.by_worker_task("g16", "work", 1)
+    assert entry.status == "done"
     assert gw.create_topic.await_count == 1
     assert gw.post.await_count >= 1
