@@ -71,7 +71,8 @@ class Registry:
             (repo, task, worktree_path, mode, _now()),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        assert cur.lastrowid is not None  # guaranteed set after INSERT
+        return cur.lastrowid
 
     def _row_to_task(self, row: sqlite3.Row) -> Task:
         return Task(**{c: row[c] for c in _TASK_COLUMNS})
@@ -94,7 +95,7 @@ class Registry:
         ).fetchall()
         return [self._row_to_task(r) for r in rows]
 
-    def update(self, task_id: int, **fields) -> None:
+    def update(self, task_id: int, **fields: object) -> None:
         if not fields:
             return
         allowed = set(_TASK_COLUMNS) - {"id", "created_at"}

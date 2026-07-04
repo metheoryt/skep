@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aiogram import Dispatcher, F
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import Message, TelegramObject
 
 from fleetd.config import Config, load_config
 from fleetd.db import Registry, Task
@@ -26,7 +28,11 @@ _CARRIERS = ("message", "edited_message", "channel_post", "edited_channel_post",
 
 
 def build_owner_middleware(config: Config):
-    async def middleware(handler, event, data):
+    async def middleware(
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ):
         user = None
         for attr in _CARRIERS:
             sub = getattr(event, attr, None)

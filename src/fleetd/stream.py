@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -11,10 +12,10 @@ class Event:
     tool_name: str = ""
     session_id: str | None = None
     is_error: bool = False
-    raw: dict = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
-def _first_blocks(obj: dict) -> list[dict]:
+def _first_blocks(obj: dict[str, Any]) -> list[dict[str, Any]]:
     content = (obj.get("message") or {}).get("content", [])
     return content if isinstance(content, list) else []
 
@@ -24,7 +25,7 @@ def parse_event(line: str) -> Event | None:
     if not line:
         return None
     try:
-        obj = json.loads(line)
+        obj: dict[str, Any] = json.loads(line)
     except (json.JSONDecodeError, ValueError):
         return None
     if not isinstance(obj, dict):
