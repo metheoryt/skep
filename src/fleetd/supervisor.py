@@ -85,7 +85,7 @@ class Supervisor:
                 if milestone is not None:
                     await self._gw.post(topic_id, milestone)
 
-            if not saw_result:
+            if not saw_result and self._reg.get_task(task_id).status != "killed":
                 terminal = "failed"
                 self._reg.log_audit(
                     task_id, "error",

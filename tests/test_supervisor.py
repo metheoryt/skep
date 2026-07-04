@@ -202,6 +202,39 @@ async def test_run_events_no_result_marks_failed(tmp_path):
     assert reg.get_task(tid).status == "failed"
 
 
+async def test_run_events_killed_no_result_no_error_audit(tmp_path):
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    gw = _gateway()
+
+    class KilledNoResultAgent:
+        def __init__(self, reg, tid):
+            self._reg = reg; self._tid = tid; self.pid = 1; self.killed = False
+            self.returncode = -15; self.stderr_text = ""
+
+        async def start(self):
+            pass
+
+        async def kill(self):
+            self.killed = True
+
+        async def events(self):
+            yield Event(kind="system", session_id="s9")
+            self._reg.update(self._tid, status="killed")
+
+    tid = reg.add_task("nix", "t", str(tmp_path / "wt"))
+    reg.update(tid, topic_id=555)
+    agent = KilledNoResultAgent(reg, tid)
+    sup = Supervisor(cfg, reg, gw,
+                     agent_factory=lambda **k: agent,
+                     worktree_factory=lambda *a, **k: None)
+
+    await sup.run_events(tid, agent)
+
+    assert reg.get_task(tid).status == "killed"
+    assert not any(row["kind"] == "error" for row in reg.audit_rows())
+
+
 async def test_spawn_worktree_failure_marks_failed_and_raises(tmp_path):
     cfg = _cfg(tmp_path)
     (cfg.repos_root).mkdir(parents=True)
