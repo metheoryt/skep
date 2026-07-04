@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+REGISTER = "register"
+HEARTBEAT = "heartbeat"
+TASK_STARTED = "task_started"
+ACTIVITY = "activity"
+MILESTONE = "milestone"
+DONE = "done"
+LS_REPLY = "ls_reply"
+SPAWN_REJECTED = "spawn_rejected"
+SPAWN = "spawn"
+KILL = "kill"
+PANIC = "panic"
+LS_REQUEST = "ls_request"
+
+
+def encode(msg: dict[str, Any]) -> str:
+    return json.dumps(msg, separators=(",", ":"))
+
+
+def decode(raw: str) -> dict[str, Any]:
+    obj = json.loads(raw)
+    if not isinstance(obj, dict) or "t" not in obj:
+        raise ValueError(f"malformed message: {raw!r}")
+    return obj
+
+
+def register_msg(host: str, profile: str, version: str,
+                 active_tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"t": REGISTER, "host": host, "profile": profile,
+            "version": version, "active_tasks": active_tasks}
+
+
+def heartbeat_msg(active_tasks: list[dict[str, Any]],
+                  capacity_remaining: int) -> dict[str, Any]:
+    return {"t": HEARTBEAT, "active_tasks": active_tasks,
+            "capacity_remaining": capacity_remaining}
+
+
+def task_started_msg(local_id: int, repo: str, title: str) -> dict[str, Any]:
+    return {"t": TASK_STARTED, "local_id": local_id, "repo": repo, "title": title}
+
+
+def activity_msg(local_id: int, line: str) -> dict[str, Any]:
+    return {"t": ACTIVITY, "local_id": local_id, "line": line}
+
+
+def milestone_msg(local_id: int, text: str) -> dict[str, Any]:
+    return {"t": MILESTONE, "local_id": local_id, "text": text}
+
+
+def done_msg(local_id: int, status: str, summary: str) -> dict[str, Any]:
+    return {"t": DONE, "local_id": local_id, "status": status, "summary": summary}
+
+
+def spawn_rejected_msg(reason: str) -> dict[str, Any]:
+    return {"t": SPAWN_REJECTED, "reason": reason}
+
+
+def spawn_msg(repo: str, task: str) -> dict[str, Any]:
+    return {"t": SPAWN, "repo": repo, "task": task}
+
+
+def kill_msg(task_id: int) -> dict[str, Any]:
+    return {"t": KILL, "task_id": task_id}
+
+
+def panic_msg() -> dict[str, Any]:
+    return {"t": PANIC}
+
+
+def ls_request_msg() -> dict[str, Any]:
+    return {"t": LS_REQUEST}

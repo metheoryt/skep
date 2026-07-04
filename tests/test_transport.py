@@ -1,4 +1,4 @@
-from skep.transport import InMemoryEventSink
+from skep.transport import InMemoryEventSink, SwitchableEventSink
 
 
 class RecordingInbox:
@@ -33,3 +33,35 @@ async def test_in_memory_sink_stamps_identity_and_forwards():
         ("milestone", "g16", "work", 5, "✅ Done: finished"),
         ("done", "g16", "work", 5, "done", "finished"),
     ]
+
+
+class _Rec:
+    def __init__(self):
+        self.calls = []
+
+    async def task_started(self, local_id, repo, title):
+        self.calls.append(("task_started", local_id, repo, title))
+
+    async def activity(self, local_id, line):
+        self.calls.append(("activity", local_id, line))
+
+    async def milestone(self, local_id, text):
+        self.calls.append(("milestone", local_id, text))
+
+    async def done(self, local_id, status, summary):
+        self.calls.append(("done", local_id, status, summary))
+
+
+async def test_switchable_forwards_to_target():
+    rec = _Rec()
+    s = SwitchableEventSink()
+    s.target = rec
+    await s.task_started(1, "nix", "t")
+    assert rec.calls == [("task_started", 1, "nix", "t")]
+
+
+async def test_switchable_drops_when_detached():
+    s = SwitchableEventSink()
+    s.target = None
+    await s.activity(1, "line")  # no target -> no error, dropped
+    await s.done(1, "done", "ok")

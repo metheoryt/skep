@@ -60,3 +60,21 @@ async def test_activity_for_unknown_task_is_ignored():
     # no on_task_started first — must not raise
     await sink.on_activity("g16", "work", 99, "orphan")
     gw.post.assert_not_awaited()
+
+
+async def test_on_task_started_is_reattach_idempotent():
+    from unittest.mock import AsyncMock, MagicMock
+    from skep.queen.bookkeeping import Bookkeeping
+    from skep.queen.telegram_sink import QueenSink
+
+    gw = MagicMock()
+    gw.create_topic = AsyncMock(return_value=100)
+    gw.post = AsyncMock(return_value=1)
+    bk = Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+
+    await sink.on_task_started("g16", "work", 1, "nix", "clean")
+    await sink.on_task_started("g16", "work", 1, "nix", "clean")  # re-register
+
+    assert gw.create_topic.await_count == 1  # no duplicate topic
+    assert bk.by_worker_task("g16", "work", 1) is not None

@@ -61,3 +61,48 @@ def test_format_ls_lists_active_with_ref_host_profile():
     out = QueenRouter(bk).format_ls()
     assert str(ref) in out
     assert "g16" in out and "work" in out and "nix" in out
+
+
+def test_presence_online_offline_touch():
+    r = QueenRouter(Bookkeeping.open(":memory:"), now=lambda: 100.0)
+    assert r.is_online("g16", "work") is False
+    r.mark_online("g16", "work")
+    assert r.is_online("g16", "work") is True
+    r.mark_offline("g16", "work")
+    assert r.is_online("g16", "work") is False
+
+
+def test_detach_if_current_ignores_stale_handler():
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    a, b = _handler(), _handler()
+    # A registers and comes online.
+    router.register("g16", "work", a)
+    router.mark_online("g16", "work")
+    # Reconnect: B replaces A in the registry (simulating a live reconnect
+    # racing A's slow-to-notice drop) and comes online too.
+    router.register("g16", "work", b)
+    router.mark_online("g16", "work")
+
+    # A's belated cleanup must be a no-op: B is still the live handler.
+    assert router.detach_if_current("g16", "work", a) is False
+    assert router.is_online("g16", "work") is True
+    assert router._workers[("g16", "work")] is b
+
+    # B's own cleanup does detach, since B is still current.
+    assert router.detach_if_current("g16", "work", b) is True
+    assert router.is_online("g16", "work") is False
+    assert ("g16", "work") not in router._workers
+
+
+async def test_format_ls_marks_detached():
+    bk = Bookkeeping.open(":memory:")
+    bk.add("g16", "work", 1, "nix", "clean", topic_id=5)
+    r = QueenRouter(bk)
+    # not online -> detached
+    # NOTE: asserting "detached" rather than "(detached)" — the marker is
+    # MarkdownV2-escaped as "\(detached\)", so the escape backslash before
+    # the closing paren makes the literal "(detached)" substring impossible
+    # to match; "detached" is the substring that's actually present.
+    assert "detached" in r.format_ls()
+    r.mark_online("g16", "work")
+    assert "detached" not in r.format_ls()

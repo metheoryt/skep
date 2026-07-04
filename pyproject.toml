@@ -3,10 +3,12 @@ name = "skep"
 version = "0.1.0"
 description = "Telegram control plane for headless Claude Code agents"
 requires-python = ">=3.13"
-dependencies = ["aiogram>=3.13"]
+dependencies = ["aiogram>=3.13", "aiohttp>=3.10", "zeroconf>=0.130"]
 
 [project.scripts]
 skep = "skep.app:run"
+skep-queen = "skep.queen.app:run"
+skepd = "skep.worker.app:run"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]
@@ -15,6 +17,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = ["mdns: requires working multicast loopback"]
 
 [build-system]
 requires = ["hatchling"]

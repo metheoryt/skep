@@ -36,6 +36,8 @@ class QueenInbox(Protocol):
                            text: str) -> None: ...
     async def on_done(self, host: str, profile: str, local_id: int,
                       status: str, summary: str) -> None: ...
+    async def on_spawn_rejected(self, host: str, profile: str,
+                                reason: str) -> None: ...
 
 
 class InMemoryEventSink:
@@ -60,3 +62,28 @@ class InMemoryEventSink:
 
     async def done(self, local_id: int, status: str, summary: str) -> None:
         await self._inbox.on_done(self._host, self._profile, local_id, status, summary)
+
+
+class SwitchableEventSink:
+    """A stable EventSink the Supervisor holds; its target is swapped per WS
+    connection. When target is None (worker detached) events are dropped —
+    agents keep running, only reporting pauses (design §6.4)."""
+
+    def __init__(self) -> None:
+        self.target: EventSink | None = None
+
+    async def task_started(self, local_id: int, repo: str, title: str) -> None:
+        if self.target is not None:
+            await self.target.task_started(local_id, repo, title)
+
+    async def activity(self, local_id: int, line: str) -> None:
+        if self.target is not None:
+            await self.target.activity(local_id, line)
+
+    async def milestone(self, local_id: int, text: str) -> None:
+        if self.target is not None:
+            await self.target.milestone(local_id, text)
+
+    async def done(self, local_id: int, status: str, summary: str) -> None:
+        if self.target is not None:
+            await self.target.done(local_id, status, summary)
