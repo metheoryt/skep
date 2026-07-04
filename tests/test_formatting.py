@@ -40,3 +40,19 @@ def test_activity_line_truncates_long_text():
     line = activity_line(ev)
     assert len(line) <= 200
     assert line.endswith("…")
+
+
+def test_milestone_escapes_reserved_chars():
+    ev = Event(kind="result", text="v1.2-3 (ok)", is_error=False)
+    assert milestone_message(ev) == "✅ Done: v1\\.2\\-3 \\(ok\\)"
+
+
+def test_escape_md_escapes_backslash():
+    assert escape_md("a\\b") == "a\\\\b"
+
+
+def test_activity_line_truncation_no_stranded_backslash():
+    ev = Event(kind="assistant_text", text="a" * 196 + "_" + "y" * 100)
+    line = activity_line(ev)
+    assert "\\…" not in line
+    assert line.endswith("…")

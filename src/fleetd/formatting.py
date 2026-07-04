@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fleetd.stream import Event
 
-_MD_RESERVED = r"_*[]()~`>#+-=|{}.!"
+_MD_RESERVED = "\\_*[]()~`>#+-=|{}.!"
 _MAX_ACTIVITY = 200
 
 
@@ -19,7 +19,12 @@ def escape_md(text: str) -> str:
 def _truncate(text: str) -> str:
     if len(text) <= _MAX_ACTIVITY:
         return text
-    return text[: _MAX_ACTIVITY - 1] + "…"
+    cut = text[: _MAX_ACTIVITY - 1]
+    # don't strand a lone escaping backslash across the cut
+    trailing = len(cut) - len(cut.rstrip("\\"))
+    if trailing % 2 == 1:
+        cut = cut[:-1]
+    return cut + "…"
 
 
 def activity_line(event: Event) -> str | None:
@@ -34,5 +39,5 @@ def milestone_message(event: Event) -> str | None:
     if event.kind != "result":
         return None
     if event.is_error:
-        return "❌ Failed: " + event.text
-    return "✅ Done: " + event.text
+        return "❌ Failed: " + escape_md(event.text)
+    return "✅ Done: " + escape_md(event.text)
