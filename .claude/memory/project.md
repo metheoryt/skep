@@ -155,6 +155,69 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   as its own phase. Decide embedded-in-queen vs standalone REST service (MemClaw-style)
   when scoping — start embedded for a small fleet unless N workers justifies the split.
 
+- **Kafka EVALUATED and REJECTED (2026-07-05) for all five candidate roles.**
+  Scale/shape mismatch: fleetd is a small star-shaped mostly-synchronous command
+  system (1 queen, handful of workers, `max_concurrent` 8), Kafka is for
+  large decoupled high-throughput streaming meshes. Per-role: (A) transport — no,
+  commands are addressed RPC-with-ack to one worker; WS already gives bidirectional
+  channels + NAT traversal via Caddy + mutual-auth + presence-for-free. (B) durable
+  event/audit log — no, SQLite (already present) suffices; if multi-consumer
+  replayable fan-out ever appears, reach for NATS JetStream / Redis Streams (single
+  binary) before Kafka. (C) shared-memory backbone — no, all prior art (Mem0,
+  namespace/ACL/version-check, MemClaw) is CRUD-over-a-store, not an event log.
+  (D) cross-fleet federation — no, Telegram bot-to-bot + A2A already right-sized for
+  the rare queen↔queen edge. Revisit ONLY if fleetd ever becomes multi-tenant SaaS
+  with hundreds of concurrent agents.
+
+- **NORTH STAR set 2026-07-05: fleetd as an autonomous agent "company," human as
+  CEO.** Owner wants the fleet to mirror a working organization. Key architectural
+  insight that makes this ADDITIVE, not a teardown: **communication topology and
+  org hierarchy are ORTHOGONAL.** The star topology (`no worker↔worker`, every node
+  trusts only the queen) is a SECURITY decision and SURVIVES fully — org
+  relationships are logical, so manager→report messages route THROUGH the queen
+  (queen becomes the switchboard, as the existing memory already anticipated). Only
+  "queen is a dumb router" bends slightly: it gains a routing table + agent registry
+  but **stays non-LLM** — management is an agent *behavior*, not a queen feature.
+  Settled model:
+  - **Persistent managers = durable STATE, not long-running processes.** A manager
+    is a durable identity (role, system-prompt, inbox, memory scope, org position)
+    the queen persists, **rehydrated into a fresh ephemeral agent on demand**, which
+    acts then terminates. So there are STILL no long-running agents — a manager
+    invocation is just an ephemeral spawn seeded with durable state (actor model +
+    persisted state + on-demand activation). Preserves fleetd's entire process model
+    (spawn/kill/worktree, containerized queen, workers-do-the-spawning); adds only
+    state management on the queen. **At most one live invocation per manager**
+    (messages queue) — actor single-thread guarantee, no split-brain.
+  - **Ephemeral ICs** = today's per-task agents, now tagged with a role, hired by a
+    manager's `delegate(role, task)` (→ queen brokers the spawn), report back, die.
+  - **Autonomy = A (autonomous by default) with EARNED tightening.** New managers
+    start gated (propose→CEO approves in Telegram, reuses P3 gated-ops brake); a
+    track record widens the autonomy/token/spawn budget envelope. Trust is a
+    consequence of performance, not a static switch.
+  - **Growth/ranks/mentorship decoded to substance (not gamification):** "learns its
+    field" = manager memory scope grows; "ranks/XP" = competence metrics — build ONLY
+    the ones that drive a decision (autonomy width, task routing, mentor eligibility);
+    "teaches new hires" = expertise transfer via memory promotion + seeding new ICs
+    with the role's distilled playbook. CEO dialogue + preferences are a first-class
+    memory source. **CAVEAT (owner-resolved):** "agents get better with experience"
+    is unproven — accumulated memory can bloat/mislead — UNLESS a feedback/curation
+    loop closes it. The **"sleep cycle / memory defragmentation"** (rank → generalize
+    → compact; cf. Generative Agents reflection, MemGPT) IS that loop; plausibly a
+    queen-scheduled nightly agent (Claude Code cron). Treat "measurably better over
+    tenure" as a HYPOTHESIS TO TEST, not a foundation to assume.
+  - **Decomposition (each its own spec→plan→build cycle, dependency order):**
+    **L0 Mailbox** (queen-routed agent-addressed messaging: addressing, inboxes,
+    at-least-once delivery, loop-prevention + depth cap — the literal "email for
+    agents") → **L1 Shared memory A/B/C** (sqlite-vec behind a `MemoryStore` seam;
+    task scratchpad / company wiki / CEO query; incl. the consolidation/sleep cycle)
+    → **L2 Persistent managers** (durable identity + on-demand rehydration) →
+    **L3 Delegation** (`delegate` → broker spawn → route result back) →
+    **L4 Earned autonomy + reputation** → **L5 Mentorship** (mostly L1 applied).
+  - **FIRST SPEC = L0 Mailbox** (foundation everything needs; extends the existing
+    `EventSink`/`CommandSource` WS seam; forces solving addressing+delivery+
+    loop-prevention, the exact gap the agent-comms survey flagged as unsolved).
+    Being designed now (brainstorm 2026-07-05).
+
 ## Gotchas
 
 - **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
