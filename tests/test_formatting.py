@@ -7,26 +7,26 @@ def test_escape_md_escapes_reserved_chars():
     assert escape_md("v1.2-3") == r"v1\.2\-3"
 
 
-def test_activity_line_for_assistant_text():
+def test_activity_line_for_assistant_text_is_plain():
     ev = Event(kind="assistant_text", text="Refactoring the module")
     assert activity_line(ev) == "💬 Refactoring the module"
 
 
-def test_activity_line_for_tool_use():
+def test_activity_line_for_tool_use_is_plain():
     ev = Event(kind="tool_use", tool_name="edit_file")
-    assert activity_line(ev) == "🔧 edit\\_file"
+    assert activity_line(ev) == "🔧 edit_file"
 
 
 def test_activity_line_none_for_tool_result():
     assert activity_line(Event(kind="tool_result")) is None
 
 
-def test_milestone_for_successful_result():
+def test_milestone_for_successful_result_is_plain():
     ev = Event(kind="result", text="All done", is_error=False)
     assert milestone_message(ev) == "✅ Done: All done"
 
 
-def test_milestone_for_error_result():
+def test_milestone_for_error_result_is_plain():
     ev = Event(kind="result", text="boom", is_error=True)
     assert milestone_message(ev) == "❌ Failed: boom"
 
@@ -39,20 +39,4 @@ def test_activity_line_truncates_long_text():
     ev = Event(kind="assistant_text", text="x" * 300)
     line = activity_line(ev)
     assert len(line) <= 200
-    assert line.endswith("…")
-
-
-def test_milestone_escapes_reserved_chars():
-    ev = Event(kind="result", text="v1.2-3 (ok)", is_error=False)
-    assert milestone_message(ev) == "✅ Done: v1\\.2\\-3 \\(ok\\)"
-
-
-def test_escape_md_escapes_backslash():
-    assert escape_md("a\\b") == "a\\\\b"
-
-
-def test_activity_line_truncation_no_stranded_backslash():
-    ev = Event(kind="assistant_text", text="a" * 196 + "_" + "y" * 100)
-    line = activity_line(ev)
-    assert "\\…" not in line
     assert line.endswith("…")

@@ -29,9 +29,9 @@ def _truncate(text: str) -> str:
 
 def activity_line(event: Event) -> str | None:
     if event.kind == "assistant_text":
-        return _truncate("💬 " + escape_md(event.text))
+        return _truncate("💬 " + event.text)
     if event.kind == "tool_use":
-        return _truncate("🔧 " + escape_md(event.tool_name))
+        return _truncate("🔧 " + event.tool_name)
     return None
 
 
@@ -39,5 +39,5 @@ def milestone_message(event: Event) -> str | None:
     if event.kind != "result":
         return None
     if event.is_error:
-        return "❌ Failed: " + escape_md(event.text)
-    return "✅ Done: " + escape_md(event.text)
+        return "❌ Failed: " + event.text
+    return "✅ Done: " + event.text
