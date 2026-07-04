@@ -96,9 +96,29 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 - **Phase 2 planning done (2026-07-04):** design approved; split into Plan 1
   (`plans/…-phase2-plan1-queen-worker-seam.md` — queen/worker split behind the
-  in-memory transport seam, 9 TDD tasks, NOT yet executed) + Plan 2 (WebSocket +
+  in-memory transport seam, 9 TDD tasks) + Plan 2 (WebSocket +
   entrypoints + mutual auth + mDNS + heartbeat/presence + queen auto-onboarding +
-  deploy — NOT yet written). Next step: execute Plan 1.
+  deploy — NOT yet written).
+
+- **Phase 2 Plan 1 EXECUTED 2026-07-05** (branch `fleetd-phase2`, formerly
+  `gortex-align`; local-only repo, no remote). All 9 TDD tasks landed: `Config`
+  split into `WorkerConfig`/`QueenConfig`; `transport.py` seam
+  (`EventSink`/`CommandHandler`/`QueenInbox` + `InMemoryEventSink`); formatting
+  descriptors now emit PLAIN text (escaping moved to the queen); agent
+  `CLAUDE_CONFIG_DIR` injection; `Supervisor` emits domain events + `max_concurrent`
+  cap; `queen/` package (`bookkeeping.py` ref-mapping SQLite, `telegram_sink.py`
+  QueenSink, `router.py` QueenRouter); interim single-process `app.py` wiring queen
+  +worker over the in-memory transport (`build_worker_and_router`, `parse_spawn`,
+  owner-gated `/spawn`/`/ls`/`/kill`/`/panic`). 69 tests pass. **Next step: write +
+  execute Plan 2** (real WebSocket transport, split `fleetqueen`/`fleetd`
+  entrypoints, mutual auth, mDNS, heartbeat/presence, queen auto-onboarding,
+  containerized-queen deploy). Two execution gotchas for Plan 2: (a) the plan
+  predated this repo's pyright governance, so plan-faithful rewrites regressed
+  `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
+  mirror the `_task()` assert-helper + `Callable[...]` factory annotations idiom;
+  (b) the `Config`→`QueenConfig` split forced migrating `telegram_gw.py` (a coupling
+  the gortex-annotation commit had introduced) — watch for similar type-annotation
+  couplings when Plan 2 moves modules to the queen.
 
 - **Agent-comms prior-art survey (deep-research, 2026-07-05): confirms the
   worker↔queen TRANSPORT is a BUILD, and surfaces shared vector memory as the
@@ -218,13 +238,14 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     loop-prevention, the exact gap the agent-comms survey flagged as unsolved).
     **DESIGNED — spec committed `docs/superpowers/specs/2026-07-05-l0-mailbox-design.md`
     (2026-07-05).** But L0 is BLOCKED on unbuilt foundations: it rides the Phase-2
-    Plan-1 transport seam (`EventSink`/`CommandSource`) — plan written, NOT executed —
-    plus Plan 2 (real WS) for anything past in-memory tests, plus an UNRESOLVED
-    spike (the worker-local MCP shim + agent↔`ref` binding, spec §15). **Build
-    order: execute Phase 2 Plan 1 (the seam) FIRST, then Plan 2, then resolve the
-    shim spike as L0's first task, then build L0.** The mailbox brainstorm ran ahead
-    of the build sequence — that's fine, the design is banked; the next EXECUTABLE
-    step is Phase 2 Plan 1.
+    Plan-1 transport seam (`EventSink`/`CommandHandler`) — **DONE 2026-07-05 (the
+    in-memory seam ships; see the Plan-1-executed bullet)** — plus Plan 2 (real WS)
+    for anything past in-memory tests, plus an UNRESOLVED spike (the worker-local
+    MCP shim + agent↔`ref` binding, spec §15). **Build order: Phase 2 Plan 1 (the
+    seam) — DONE; NEXT write + execute Plan 2, then resolve the shim spike as L0's
+    first task, then build L0.** The mailbox brainstorm ran ahead of the build
+    sequence — that's fine, the design is banked; the next EXECUTABLE step is now
+    Phase 2 Plan 2.
 
 - **Usage-limit handling = PARK & RESUME (recorded 2026-07-05).** The `claude` CLI
   has NO native pause/resume: on a Pro/Max plan usage-limit hit it "blocks further
