@@ -4,12 +4,14 @@ import asyncio
 import os
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import ChatMemberUpdated
 from aiohttp import web
 
 from skep.app import build_dispatcher
 from skep.config import QueenConfig, load_queen_config
 from skep.discovery import advertise
 from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.onboarding import onboard_group
 from skep.queen.router import QueenRouter
 from skep.queen.telegram_sink import QueenSink
 from skep.telegram_gw import Gateway, build_bot
@@ -25,6 +27,11 @@ def build_queen(qcfg: QueenConfig) -> tuple[Bot, Dispatcher, web.Application, Qu
     app = web.Application()
     QueenWsServer(router, sink, qcfg.shared_secret).attach(app)
     dp = build_dispatcher(router, qcfg)
+
+    @dp.my_chat_member()
+    async def _on_added(event: ChatMemberUpdated) -> None:
+        await onboard_group(bot, event.chat.id, qcfg.owner_id)
+
     return bot, dp, app, router
 
 
