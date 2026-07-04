@@ -234,6 +234,26 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   INDEPENDENT (owner-confirmed) but route-around-exhaustion is MOSTLY N/A — see the
   profile↔repo binding constraint below.
 
+- **Vasya integration = QUEEN-side surface, NOT a worker endpoint (north-star
+  adjacency, recorded 2026-07-05).** Vasya is the owner's other project: a Jarvis-
+  like voice assistant on a Windows laptop that runs AI to manage the host. Q: can
+  local host agents reach the fleetd worker on their host? A: by design NO — the
+  worker dials OUT to the queen and its only localhost server (the L0 MCP shim) is
+  bound to one spawned agent's `ref`; exposing the worker breaks "trusts exactly one
+  peer" + adds a local RCE authz surface. Integration goes to the QUEEN (or a local
+  queen), three patterns, star-clean in all: **(A) Vasya as a voice CEO surface** —
+  peer to Telegram, authenticated under the same owner-lock; the queen can route
+  `ceo` messages to voice so the fleet TALKS BACK (= the P3 talk-back / `human-loop`
+  surface, by voice). **(B) Vasya as a host-agent via MCP** — expose host tools
+  (speak/files/apps) as an MCP server that fleet agents consume (fits the "adopt MCP"
+  decision; stdio/HTTP, Windows-friendly); optionally a first-class L0-mailbox
+  participant (connects to the queen, never a worker). **(C) local queen on the
+  laptop** — the real answer if offline/low-latency is needed: Vasya→local queen
+  (localhost, offline-OK) which FEDERATES with the homeserver queen (the recorded
+  multi-fleet federation path). CAVEAT: Vasya has powerful host capability → fleet
+  agents driving it = blast-radius expansion → gate behind P3/L4 gated-ops +
+  owner-lock. Own future thread (its own brainstorm); does NOT affect the L0 spec.
+
 ## Gotchas
 
 - **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
