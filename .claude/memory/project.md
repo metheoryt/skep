@@ -100,6 +100,61 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   entrypoints + mutual auth + mDNS + heartbeat/presence + queen auto-onboarding +
   deploy — NOT yet written). Next step: execute Plan 1.
 
+- **Agent-comms prior-art survey (deep-research, 2026-07-05): confirms the
+  worker↔queen TRANSPORT is a BUILD, and surfaces shared vector memory as the
+  strongest BUY/borrow signal.** 108-agent fan-out, 25 sources, 22 claims
+  confirmed / 3 refuted via adversarial verification. Load-bearing findings:
+  - **Transport = BUILD (confirmed).** No emerging standard targets a self-hosted
+    WebSocket star. MCP / A2A / ACP are ALL HTTP-family (MCP=Streamable HTTP+stdio;
+    A2A=JSON-RPC/gRPC/SSE; ACP=REST) — none uses WebSocket (only an unofficial WS
+    dispatcher in a 3rd-party `a2a-rust` SDK). A2A specifically assumes
+    peer-to-peer/mesh, which our star topology (no worker↔worker) forbids.
+    Vindicates the existing WS + mutual-auth decision.
+  - **Borrow addressing, don't invent it:** AutoGen Core is the canonical
+    "message-bus for agents" — direct-messaging by agent ID + broadcast pub/sub
+    where a topic = (type + source) is an indirection over agent IDs. Maps 1:1
+    onto queen→worker routing by `(host, profile)`. AG2 = Apache-2.0 community
+    fork; MS is folding AutoGen+Semantic Kernel into "Agent Framework" (RC early
+    2026), so AutoGen-the-brand is a moving target — the *Core primitives* are the
+    durable idea. (LangGraph=graph/shared-state, CrewAI=role-orchestration — neither
+    is our shape.)
+  - **MCP = ADOPT** for the queen's tool/context integration (orthogonal to
+    transport; universal, LF-governed Dec 2025, first-party in Claude Agent SDK).
+  - **Shared vector memory = BUY/borrow the patterns, not build governance.** It's
+    the classical blackboard pattern (Nii 1986) modernized. Prior art: **Mem0**
+    (agents share one memory instance keyed by scope), **Zep/Letta** memory blocks.
+    Three primitives to adopt rather than reinvent (NirDiamant Agent-Memory notebook
+    + arXiv 2505.18279 "Collaborative Memory"): (1) namespace partitioning w/
+    per-partition ACLs; (2) explicit concurrent-write conflict resolution
+    (last-write-wins vs optimistic version-checking — write supplies current
+    version, stale writes rejected); (3) provenance/staleness handling. A June-2026
+    preprint (**MemClaw**, arXiv 2606.24535, Apache-2.0) reframes multi-agent memory
+    as a distributed-systems problem → a CENTRALIZED governed memory service over
+    authenticated REST in a single-coordinator pattern = architecturally OUR QUEEN.
+    (Caveat: single non-peer-reviewed self-marketing preprint; treat as thesis.)
+  - **A2A = RESERVE for cross-fleet (queen↔queen) only** — the one place P2P interop
+    is warranted; complements/alternates with the Telegram bot-to-bot federation
+    edge already recorded above.
+  - **Open gaps the research could NOT close:** (a) whether ANY production OSS ships
+    an authenticated-WS agent mailbox in a star shape (closest = that unofficial
+    a2a-rust WS dispatcher); (b) whether a centralized REST memory service beats
+    just embedding a vector store IN the queen process below N workers — governance
+    overhead may not pay off small; (c) NONE of the verified sources covered
+    loop-prevention or delivery guarantees (at-least-once/exactly-once, TTLs,
+    dead-letter) — so mailbox delivery semantics are ours to spec (ties to the
+    bot-to-bot loop-prevention already flagged). Full report:
+    `/tmp/claude-1000/-home-me-gh-fleetd/50a5c29e-15d2-4849-9e2e-1cfc1179d282/tasks/wb0dnj0qu.output`.
+
+- **DECIDED 2026-07-05: shared vector memory becomes a first-class fleetd
+  capability (a future phase, NOT folded into the P2 queen/worker split).** Owner
+  confirmed it's a good idea. Shape (from the survey verdict): a queen-hosted,
+  centrally-governed semantic memory substrate (blackboard) that workers/agents
+  read+write through the queen — reuse Mem0-style scoping + namespace/ACL +
+  version-checked writes rather than building governance from scratch. Deliberately
+  sequenced AFTER the transport/topology lands (P2) and after talk-back (P3); slot
+  as its own phase. Decide embedded-in-queen vs standalone REST service (MemClaw-style)
+  when scoping — start embedded for a small fleet unless N workers justifies the split.
+
 ## Gotchas
 
 - **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
@@ -133,4 +188,5 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 - Phase 1 is `native` mode only, single process. Phase 2 = queen/workers (see
   `2026-07-04-fleetd-phase2-queen-workers-design.md`). `ask_human` MCP,
   soft-steer, gated-ops approval → Phase 3; sandbox, resume-after-restart,
-  worktree cleanup → Phase 4.
+  worktree cleanup → Phase 4. **Shared vector memory (queen-hosted blackboard) →
+  its own later phase, after P2/P3** (decided 2026-07-05; see Decisions).
