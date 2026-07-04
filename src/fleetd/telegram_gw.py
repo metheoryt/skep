@@ -5,14 +5,14 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 
-from fleetd.config import Config
+from fleetd.config import QueenConfig
 
 
 def is_owner(user_id: int | None, owner_id: int) -> bool:
     return user_id is not None and user_id == owner_id
 
 
-def build_bot(config: Config) -> Bot:
+def build_bot(config: QueenConfig) -> Bot:
     return Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2),
@@ -20,7 +20,7 @@ def build_bot(config: Config) -> Bot:
 
 
 class Gateway:
-    def __init__(self, bot: Bot, config: Config):
+    def __init__(self, bot: Bot, config: QueenConfig):
         self._bot = bot
         self._chat_id = config.group_chat_id
 

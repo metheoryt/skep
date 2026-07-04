@@ -2,13 +2,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from fleetd.config import Config
+from fleetd.config import QueenConfig
 from fleetd.telegram_gw import Gateway, is_owner
 
 
 def _cfg():
-    from pathlib import Path
-    return Config("tok", 42, -1001, Path("/r"), Path("/w"))
+    return QueenConfig("tok", 42, -1001)
 
 
 def test_is_owner():
