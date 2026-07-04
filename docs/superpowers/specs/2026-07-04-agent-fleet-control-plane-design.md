@@ -163,14 +163,19 @@ True instant mid-tool interrupt of a headless CLI is limited. Two real levers:
 formatting, Telegram user-ID lock, audit log, `/panic`. Native mode only.
 *Outcome:* dispatch from `#control`, watch live, kill. Useful on day one.
 
-**Phase 2 — Talk-back + brakes.**
-`human-loop` MCP (`ask_human`, `notify_human`), reply-routing / soft-steer,
-gated-ops approval (PreToolUse classifier + `--permission-prompt-tool`), sandbox
-mode.
+**Phase 2 — Queen + isolated workers.** *(Re-scoped 2026-07-04 — see
+`2026-07-04-fleetd-phase2-queen-workers-design.md`.)* Split the Phase-1 single
+process into a Telegram-owning **queen** and one or more **workers**; multi-host,
+mDNS + public-link + WG discovery, per-worker Claude-profile isolation, capacity
+cap. The original "talk-back + brakes" scope moved to Phase 3.
 
-**Phase 3 — Polish.**
-Live status board, worktree auto-lifecycle (create on spawn, offer cleanup on
-done), resume-after-restart, formatting refinement.
+**Phase 3 — Talk-back + brakes.**
+`human-loop` MCP (`ask_human`, `notify_human`), reply-routing / soft-steer,
+gated-ops approval — via a **blocking PreToolUse hook** (note: `--permission-prompt-tool`
+was removed in `claude` 2.1.201).
+
+**Phase 4 — Sandbox** (container-per-agent), plus polish: live status board,
+worktree auto-lifecycle, resume-after-restart, formatting refinement.
 
 **Later (out of scope for this spec).**
 Cross-agent message bus; cross-machine fleet unification.
