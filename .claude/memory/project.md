@@ -83,6 +83,22 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     limits + loop-prevention. WS stays for worker↔queen; bot-to-bot is the
     cross-fleet edge only. `aiogram` may not expose 9.6/10.0 yet — verify first.
     Sources in the Phase-2 design doc §16.
+  - **Managed Bots does NOT obviate the control plane** (evaluated): the daemon
+    must run on each host regardless (Telegram features don't execute code on your
+    machines); WS stays intra-fleet. Only exception recorded: a remote low-traffic
+    worker MAY use a bot-to-bot uplink instead of a public WS endpoint (§12.1).
+  - **Queen group auto-onboarding (Plan 2, spec §10.1):** queen can discover groups
+    via `my_chat_member`, self-register commands (`setMyCommands`+`BotCommandScopeChat`),
+    check readiness (`getChat.is_forum`/`getChatMember`) + prompt — but CANNOT
+    enable Topics (no Bot API method) or self-promote to admin (human grants both).
+    Gate on owner-presence/allowlist. Makes `group_chat_id` optional; one fleet →
+    one control group (multi-group streaming = YAGNI).
+
+- **Phase 2 planning done (2026-07-04):** design approved; split into Plan 1
+  (`plans/…-phase2-plan1-queen-worker-seam.md` — queen/worker split behind the
+  in-memory transport seam, 9 TDD tasks, NOT yet executed) + Plan 2 (WebSocket +
+  entrypoints + mutual auth + mDNS + heartbeat/presence + queen auto-onboarding +
+  deploy — NOT yet written). Next step: execute Plan 1.
 
 ## Gotchas
 

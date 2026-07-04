@@ -302,6 +302,28 @@ and **mutually authenticated**. First-class concerns:
   part of this repo's implementation. This spec fixes the contract: queen listens
   `:8765`, reads `FLEET_SHARED_SECRET`, advertises `public_url`.
 
+### 10.1 Queen group onboarding (Plan 2)
+
+The queen can self-onboard to its control group instead of Phase-1's hardcoded
+`group_chat_id` + manual README setup. Verified against the Bot API (2026-07-04):
+
+- **Auto-doable:** discover groups it's added to / promoted in via `my_chat_member`
+  updates (learns each `chat_id`); register its commands per-chat via
+  `setMyCommands` + `BotCommandScopeChat`; inspect readiness via `getChat.is_forum`
+  and `getChatMember` (own admin rights) and **post a setup prompt** if something's
+  missing.
+- **NOT auto-doable (human admin action):** *enabling Topics/forum mode* — no Bot
+  API method exists (`is_forum` is read-only; `toggleForum` is MTProto-only); and
+  *bootstrapping its own admin / `can_manage_topics`* — a bot can't self-promote
+  from non-admin.
+- **Security gate:** anyone can add the bot to any group. Act only on groups where
+  the **owner is a member/admin** (`getChatMember(chat_id, owner_id)`) or an
+  explicit allowlist — never onboard arbitrary groups. (The owner-ID command lock
+  still applies regardless.)
+- **Scope:** makes `group_chat_id` optional and self-validating; **one fleet → one
+  control group** — multi-group streaming is YAGNI. Queen polish, lands in Plan 2
+  with the queen entrypoint. Sources in §16.
+
 ## 11. Refactor from Phase 1
 
 | Phase-1 location | Phase-2 change |
@@ -356,7 +378,16 @@ bot-to-bot was impossible and that only an MTProto user-account could mint bots)
 channel stays **WebSocket** (§5), not bot-to-bot: routing agents through Telegram
 would force a bot token onto every worker (undoing §9's token-only-on-queen),
 subject live streaming to Telegram rate limits + loop-prevention, and make Telegram
-a hard dependency for local control. Bot-to-bot is strictly the *cross-fleet* edge.
+a hard dependency for local control. Bot-to-bot is the *cross-fleet* edge.
+
+**One noted exception:** a *remote, low-traffic* worker with no direct network path
+to the queen MAY use a **bot-to-bot uplink** (NAT-friendly, `@username`, no public
+port) instead of exposing the queen over Caddy/WG — accepting Telegram's
+rate-limit/latency for that one link. High-throughput workers keep WebSocket. This
+is the only place a worker↔queen link would ever ride Telegram; it stays Later
+scope. **Managed Bots does not replace the intra-fleet control plane** — it only
+streamlines per-fleet bot provisioning and cross-network reach; the daemon still
+runs on each host (Telegram features don't execute code on your machines).
 
 **Caveat:** Bot API 9.6/10.0/10.1 are weeks-to-months old; `aiogram` may not yet
 expose these methods — verify library support before building this layer (it is
