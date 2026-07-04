@@ -133,8 +133,23 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   two-worker WS e2e + auth-reject). Deps added: `aiohttp`, `zeroconf`. **Deviation
   from design §15:** `telegram_gw.py`/`formatting.py` stay at `src/skep/` (NOT moved
   into `queen/`) to dodge gotcha (b) below. Containerized-queen/Caddy VPS wiring is
-  explicitly OUT of scope (lives in `~/gh/vps`). **Next step: EXECUTE Plan 2.**
-  Two execution gotchas for Plan 2: (a) the plan
+  explicitly OUT of scope (lives in `~/gh/vps`).
+  **Plan 2 EXECUTED 2026-07-05** (subagent-driven, all 12 TDD tasks; merged to `main`
+  at merge commit `78f872e`, feature branch `feat/skep-phase2-plan2` deleted; 117
+  tests pass `-m "not mdns"` + mDNS round-trip 4/4 local, `uvx pyright src` clean).
+  New modules: `wire.py`, `auth.py`, `ws_transport.py`, `discovery.py`, `queen/app.py`,
+  `worker/app.py`, `queen/onboarding.py`. AUTH IS NOW 4 FRAMES (challenge/auth/auth_ok/
+  auth_error) — `handshake_server` sends `auth_error` before rejecting so a peer parked
+  on recv() under gather doesn't deadlock. Whole-branch (opus) review caught+fixed 3
+  cross-task bugs per-task reviews missed: reconnect-clobber race (→ `QueenRouter.
+  detach_if_current` compare-and-clear), empty `shared_secret` failed OPEN (→ both
+  `serve()` fail-closed with SystemExit on empty/whitespace secret), and an unguarded
+  re-attach replay loop (→ per-item try/except). DEFERRED follow-ups (not blocking,
+  logged): wedged-worker liveness eviction (§6.4 K-overdue sweeper — only transport
+  ping/pong exists today); `wire.LS_REPLY`/`LS_REQUEST` are unused (no live `/ls` query
+  path — `/ls` reads bookkeeping); minor test-hygiene nits. **Next step: resolve the L0
+  MCP-shim spike (spec §15), then build L0 Mailbox.**
+  Two execution gotchas from Plan 2 (kept for reference): (a) the plan
   predated this repo's pyright governance, so plan-faithful rewrites regressed
   `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
   mirror the `_task()` assert-helper + `Callable[...]` factory annotations idiom;
@@ -264,10 +279,10 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
     in-memory seam ships; see the Plan-1-executed bullet)** — plus Plan 2 (real WS)
     for anything past in-memory tests, plus an UNRESOLVED spike (the worker-local
     MCP shim + agent↔`ref` binding, spec §15). **Build order: Phase 2 Plan 1 (the
-    seam) — DONE; Plan 2 WRITTEN 2026-07-05 (NEXT: execute it), then resolve the
-    shim spike as L0's first task, then build L0.** The mailbox brainstorm ran ahead
+    seam) — DONE; Plan 2 (real WS transport) — DONE + merged 2026-07-05; then resolve
+    the shim spike as L0's first task, then build L0.** The mailbox brainstorm ran ahead
     of the build sequence — that's fine, the design is banked; the next EXECUTABLE
-    step is now executing Phase 2 Plan 2.
+    step is now the L0 MCP-shim spike, then L0 Mailbox.
 
 - **Usage-limit handling = PARK & RESUME (recorded 2026-07-05).** The `claude` CLI
   has NO native pause/resume: on a Pro/Max plan usage-limit hit it "blocks further
