@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -156,6 +157,13 @@ class WorkerWsClient:
         return [{"local_id": t.id, "repo": t.repo, "title": t.task}
                 for t in self._sup.list_active() if t.id is not None]
 
+    async def _heartbeat_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        while True:
+            await asyncio.sleep(self._heartbeat)
+            active = self._active_payload()
+            remaining = max(0, self._cfg.max_concurrent - len(active))
+            await ws.send_str(wire.encode(wire.heartbeat_msg(active, remaining)))
+
     async def run_once(self, session: aiohttp.ClientSession, url: str) -> None:
         async with session.ws_connect(url, heartbeat=self._heartbeat) as ws:
             async def send(m: dict[str, Any]) -> None:
@@ -172,12 +180,14 @@ class WorkerWsClient:
                 self._cfg.host, self._cfg.profile, WORKER_VERSION,
                 self._active_payload()))
             self._switch.target = WsEventSink(ws)
+            hb = asyncio.create_task(self._heartbeat_loop(ws))
             try:
                 async for msg in ws:
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         continue
                     await self._on_command(ws, wire.decode(msg.data))
             finally:
+                hb.cancel()
                 self._switch.target = None
 
     async def _on_command(self, ws: aiohttp.ClientWebSocketResponse,

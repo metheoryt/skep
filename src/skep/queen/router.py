@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
 from skep.transport import CommandHandler
@@ -10,9 +13,13 @@ class UnknownWorker(Exception):
 
 
 class QueenRouter:
-    def __init__(self, bookkeeping: Bookkeeping):
+    def __init__(self, bookkeeping: Bookkeeping, *,
+                 now: Callable[[], float] = time.monotonic):
         self._bk = bookkeeping
         self._workers: dict[tuple[str, str], CommandHandler] = {}
+        self._online: set[tuple[str, str]] = set()
+        self._last_seen: dict[tuple[str, str], float] = {}
+        self._now = now
 
     def register(self, host: str, profile: str, handler: CommandHandler) -> None:
         self._workers[(host, profile)] = handler
@@ -20,11 +27,21 @@ class QueenRouter:
     def unregister(self, host: str, profile: str) -> None:
         self._workers.pop((host, profile), None)
 
-    def mark_online(self, host: str, profile: str) -> None: ...
+    def mark_online(self, host: str, profile: str) -> None:
+        self._online.add((host, profile))
+        self._last_seen[(host, profile)] = self._now()
 
-    def mark_offline(self, host: str, profile: str) -> None: ...
+    def mark_offline(self, host: str, profile: str) -> None:
+        self._online.discard((host, profile))
 
-    def touch(self, host: str, profile: str) -> None: ...
+    def touch(self, host: str, profile: str) -> None:
+        self._last_seen[(host, profile)] = self._now()
+
+    def is_online(self, host: str, profile: str) -> bool:
+        return (host, profile) in self._online
+
+    def last_seen(self, host: str, profile: str) -> float | None:
+        return self._last_seen.get((host, profile))
 
     async def cmd_spawn(self, host: str, profile: str, repo: str, task: str) -> None:
         handler = self._workers.get((host, profile))
@@ -51,9 +68,11 @@ class QueenRouter:
         entries = self._bk.list_active()
         if not entries:
             return "No active agents\\."
-        lines = [
-            f"`{e.ref}` {escape_md(e.host)}/{escape_md(e.profile)} "
-            f"{escape_md(e.repo)} — {escape_md(e.status)}"
-            for e in entries
-        ]
+        lines = []
+        for e in entries:
+            marker = "" if self.is_online(e.host, e.profile) else " \\(detached\\)"
+            lines.append(
+                f"`{e.ref}` {escape_md(e.host)}/{escape_md(e.profile)} "
+                f"{escape_md(e.repo)} — {escape_md(e.status)}{marker}"
+            )
         return "\n".join(lines)

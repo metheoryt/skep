@@ -240,3 +240,40 @@ async def test_worker_client_reports_capacity_rejection():
     finally:
         await server.close()
     assert any(e[0] == "spawn_rejected" for e in inbox.events)
+
+
+async def test_worker_sends_heartbeat():
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor()
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s", heartbeat=0.05)
+    seen = {"beat": False}
+
+    # Observe router.touch indirectly via the public last_seen() accessor
+    # (avoids reaching into the private _last_seen dict). Registration
+    # itself calls mark_online (which also sets last_seen), so the
+    # baseline must be captured *after* the worker is online — otherwise
+    # the registration bump alone would satisfy the assertion without any
+    # application-level heartbeat frame ever being sent.
+    try:
+        async with aiohttp.ClientSession() as sess:
+            task = asyncio.create_task(client.run_once(sess, url))
+            for _ in range(100):
+                if router.is_online("g16", "work"):
+                    break
+                await asyncio.sleep(0.02)
+            assert router.is_online("g16", "work")
+            before = router.last_seen("g16", "work")
+
+            for _ in range(100):
+                after = router.last_seen("g16", "work")
+                if after is not None and after != before:
+                    seen["beat"] = True
+                    break
+                await asyncio.sleep(0.02)
+            task.cancel()
+    finally:
+        await server.close()
+    assert seen["beat"]
