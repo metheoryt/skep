@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aiogram import Dispatcher, F
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import Message, TelegramObject
 
 from fleetd.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
 from fleetd.db import Registry
@@ -51,7 +53,11 @@ def build_worker_and_router(
 def build_dispatcher(router: QueenRouter, config: QueenConfig) -> Dispatcher:
     dp = Dispatcher()
 
-    async def owner_mw(handler, event, data):
+    async def owner_mw(
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
         for attr in ("message", "edited_message", "callback_query"):
             sub = getattr(event, attr, None)
             user = getattr(sub, "from_user", None) if sub else None

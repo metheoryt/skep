@@ -14,10 +14,15 @@ class EventSink(Protocol):
 
 @runtime_checkable
 class CommandHandler(Protocol):
-    """Queen -> worker. The worker (Supervisor) implements these."""
-    async def spawn(self, repo: str, task: str) -> None: ...
-    async def kill(self, local_id: int) -> None: ...
-    async def panic(self) -> None: ...
+    """Queen -> worker. The worker (Supervisor) implements these.
+
+    Return values (new task id / killed? / count) are for local callers and
+    tests; the queen router ignores them. Typed truthfully so the concrete
+    Supervisor conforms to the protocol.
+    """
+    async def spawn(self, repo: str, task: str) -> int: ...
+    async def kill(self, task_id: int) -> bool: ...
+    async def panic(self) -> int: ...
 
 
 @runtime_checkable

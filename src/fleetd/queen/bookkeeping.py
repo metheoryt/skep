@@ -58,7 +58,8 @@ class Bookkeeping:
             (host, profile, local_id, repo, title, topic_id),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        assert cur.lastrowid is not None
+        return cur.lastrowid
 
     def by_worker_task(self, host: str, profile: str, local_id: int) -> Entry | None:
         row = self._conn.execute(

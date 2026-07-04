@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
+from pathlib import Path
 
 from fleetd.agent import AgentProcess, create_worktree
 from fleetd.config import WorkerConfig
@@ -21,7 +23,8 @@ def _slug(text: str) -> str:
 
 class Supervisor:
     def __init__(self, config: WorkerConfig, registry: Registry, sink: EventSink,
-                 agent_factory=AgentProcess, worktree_factory=create_worktree):
+                 agent_factory: Callable[..., AgentProcess] = AgentProcess,
+                 worktree_factory: Callable[[Path, Path, str], None] = create_worktree):
         self._cfg = config
         self._reg = registry
         self._sink = sink
@@ -32,6 +35,11 @@ class Supervisor:
 
     def list_active(self) -> list[Task]:
         return self._reg.list_active()
+
+    def _task(self, task_id: int) -> Task:
+        task = self._reg.get_task(task_id)
+        assert task is not None, f"task {task_id} vanished from registry"
+        return task
 
     async def spawn(self, repo: str, task: str) -> int:
         if len(self._agents) >= self._cfg.max_concurrent:
@@ -81,7 +89,7 @@ class Supervisor:
                     self._reg.update(
                         task_id,
                         session_id=ev.session_id
-                        or self._reg.get_task(task_id).session_id,
+                        or self._task(task_id).session_id,
                     )
                     terminal = "failed" if ev.is_error else "done"
 
@@ -94,7 +102,7 @@ class Supervisor:
                 if milestone is not None:
                     await self._sink.milestone(task_id, milestone)
 
-            if not saw_result and self._reg.get_task(task_id).status != "killed":
+            if not saw_result and self._task(task_id).status != "killed":
                 terminal = "failed"
                 summary = f"agent exited without result (rc={agent.returncode})"
                 self._reg.log_audit(
@@ -106,7 +114,7 @@ class Supervisor:
             summary = f"run_events crashed: {exc}"
             self._reg.log_audit(task_id, "error", summary)
         finally:
-            if self._reg.get_task(task_id).status == "killed":
+            if self._task(task_id).status == "killed":
                 terminal = "killed"
             self._reg.update(task_id, status=terminal)
             self._agents.pop(task_id, None)
