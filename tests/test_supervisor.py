@@ -106,3 +106,101 @@ async def test_panic_kills_all_active(tmp_path):
     n = await sup.panic()
     assert n == 2
     assert a1.killed and a2.killed
+
+
+async def test_run_events_error_result_marks_failed(tmp_path):
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    gw = _gateway()
+    events = [
+        Event(kind="system", session_id="s9"),
+        Event(kind="result", text="boom", is_error=True),
+    ]
+    agent = FakeAgent(events)
+    sup = Supervisor(cfg, reg, gw,
+                     agent_factory=lambda **k: agent,
+                     worktree_factory=lambda *a, **k: None)
+    tid = reg.add_task("nix", "t", str(tmp_path / "wt"))
+    reg.update(tid, topic_id=555)
+
+    await sup.run_events(tid, agent)
+
+    assert reg.get_task(tid).status == "failed"
+
+
+async def test_run_events_gateway_exception_marks_failed(tmp_path):
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    gw = _gateway()
+    gw.post = AsyncMock(side_effect=RuntimeError("telegram down"))
+    events = [
+        Event(kind="system", session_id="s9"),
+        Event(kind="assistant_text", text="hi"),
+        Event(kind="result", text="done", is_error=False),
+    ]
+    agent = FakeAgent(events)
+    sup = Supervisor(cfg, reg, gw,
+                     agent_factory=lambda **k: agent,
+                     worktree_factory=lambda *a, **k: None)
+    tid = reg.add_task("nix", "t", str(tmp_path / "wt"))
+    reg.update(tid, topic_id=555)
+
+    await sup.run_events(tid, agent)  # must not raise
+
+    assert reg.get_task(tid).status == "failed"
+    assert any(row["kind"] == "error" for row in reg.audit_rows())
+
+
+async def test_run_events_preserves_killed_status(tmp_path):
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    gw = _gateway()
+
+    class KillMidStreamAgent:
+        def __init__(self, reg, tid):
+            self._reg = reg; self._tid = tid; self.pid = 1; self.killed = False
+
+        async def start(self):
+            pass
+
+        async def kill(self):
+            self.killed = True
+
+        async def events(self):
+            yield Event(kind="system", session_id="s9")
+            self._reg.update(self._tid, status="killed")   # simulate kill arriving mid-run
+            yield Event(kind="result", text="done", is_error=False)
+
+    tid = reg.add_task("nix", "t", str(tmp_path / "wt"))
+    reg.update(tid, topic_id=555)
+    agent = KillMidStreamAgent(reg, tid)
+    sup = Supervisor(cfg, reg, gw,
+                     agent_factory=lambda **k: agent,
+                     worktree_factory=lambda *a, **k: None)
+
+    await sup.run_events(tid, agent)
+
+    assert reg.get_task(tid).status == "killed"
+
+
+async def test_run_events_activity_posts_once_then_edits(tmp_path):
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    gw = _gateway()
+    events = [
+        Event(kind="system", session_id="s9"),
+        Event(kind="assistant_text", text="hi"),
+        Event(kind="tool_use", tool_name="edit_file"),
+        Event(kind="result", text="finished", is_error=False),
+    ]
+    agent = FakeAgent(events)
+    sup = Supervisor(cfg, reg, gw,
+                     agent_factory=lambda **k: agent,
+                     worktree_factory=lambda *a, **k: None)
+    tid = reg.add_task("nix", "t", str(tmp_path / "wt"))
+    reg.update(tid, topic_id=555)
+
+    await sup.run_events(tid, agent)
+
+    assert gw.post.await_count == 2
+    assert gw.edit.await_count == 1

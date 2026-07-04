@@ -24,6 +24,7 @@ class Supervisor:
         self._agent_factory = agent_factory
         self._worktree_factory = worktree_factory
         self._agents: dict[int, AgentProcess] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     def list_active(self) -> list[Task]:
         return self._reg.list_active()
@@ -48,7 +49,9 @@ class Supervisor:
         self._agents[tid] = agent
         self._reg.update(tid, status="running", pid=agent.pid)
 
-        asyncio.create_task(self.run_events(tid, agent))
+        task = asyncio.create_task(self.run_events(tid, agent))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
         return tid
 
     async def run_events(self, task_id: int, agent: AgentProcess) -> None:
@@ -74,6 +77,9 @@ class Supervisor:
                 milestone = milestone_message(ev)
                 if milestone is not None:
                     await self._gw.post(topic_id, milestone)
+        except Exception as exc:
+            terminal = "failed"
+            self._reg.log_audit(task_id, "error", f"run_events crashed: {exc}")
         finally:
             if self._reg.get_task(task_id).status == "killed":
                 terminal = "killed"
