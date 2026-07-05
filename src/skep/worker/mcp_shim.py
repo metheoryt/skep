@@ -1,0 +1,101 @@
+"""Per-agent MCP shim: exposes send_message / read_inbox over streamable-HTTP.
+
+Identity (`tid`) is closed over per agent -- spoof-proof `from` (§11): the
+spawned agent cannot influence which mailbox identity its messages carry.
+Each agent gets its own FastMCP app on an ephemeral 127.0.0.1 port (never
+exposed off-host).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import socket
+from typing import Any, Callable
+
+from mcp.server.fastmcp import FastMCP
+
+from skep.transport import MailboxClient
+
+
+def _pick_free_port(host: str) -> int:
+    """Reserve an ephemeral port on `host` by binding and immediately closing.
+
+    FastMCP's own port=0 binding doesn't surface the OS-assigned port back
+    to us (uvicorn is constructed fresh, internally, inside
+    run_streamable_http_async), so we pick the port ourselves up front and
+    tell FastMCP to bind that exact port. Small TOCTOU risk between the
+    close() here and uvicorn's bind, acceptable for a localhost-only,
+    one-shot-per-agent server.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+class MailboxShim:
+    def __init__(
+        self,
+        client: MailboxClient,
+        tid: int,
+        host: str = "127.0.0.1",
+    ) -> None:
+        self._client = client
+        self._tid = tid
+        self._host = host
+        self._server: FastMCP | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._port: int | None = None
+
+    def _tools(self) -> dict[str, Callable[..., Any]]:
+        async def send_message(
+            to: str,
+            subject: str,
+            body: str,
+            in_reply_to: int | None = None,
+        ) -> dict[str, Any]:
+            """Send a message to another agent (ceo / mgr:<name> / <ref>)."""
+            reply = await self._client.send(
+                self._tid, to, subject, body, in_reply_to)
+            return {
+                "ok": reply.ok,
+                "message_id": reply.message_id,
+                "error": reply.error,
+                "status": reply.status,
+            }
+
+        async def read_inbox() -> dict[str, Any]:
+            """Read and archive all unread messages addressed to you."""
+            messages = await self._client.read(self._tid)
+            return {"messages": messages}
+
+        return {"send_message": send_message, "read_inbox": read_inbox}
+
+    def _build_server(self) -> FastMCP:
+        port = self._port if self._port is not None else 0
+        server = FastMCP("skep-mailbox", host=self._host, port=port)
+        tools = self._tools()
+        server.add_tool(tools["send_message"], name="send_message")
+        server.add_tool(tools["read_inbox"], name="read_inbox")
+        return server
+
+    async def start(self) -> str:
+        self._port = _pick_free_port(self._host)
+        self._server = self._build_server()
+        self._task = asyncio.create_task(
+            self._server.run_streamable_http_async())
+        return self._base_url()
+
+    def _base_url(self) -> str:
+        assert self._server is not None
+        port = self._server.settings.port
+        return f"http://{self._host}:{port}/mcp"
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+        self._server = None

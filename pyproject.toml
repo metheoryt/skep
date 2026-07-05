@@ -3,7 +3,7 @@ name = "skep"
 version = "0.1.0"
 description = "Telegram control plane for headless Claude Code agents"
 requires-python = ">=3.13"
-dependencies = ["aiogram>=3.13", "aiohttp>=3.10", "zeroconf>=0.130"]
+dependencies = ["aiogram>=3.13", "aiohttp>=3.10", "zeroconf>=0.130", "mcp>=1.2"]
 
 [project.scripts]
 skep = "skep.app:run"
