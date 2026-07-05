@@ -12,6 +12,7 @@ import asyncio
 import socket
 from typing import Any, Callable
 
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 from skep.transport import MailboxClient
@@ -43,6 +44,7 @@ class MailboxShim:
         self._tid = tid
         self._host = host
         self._server: FastMCP | None = None
+        self._userver: uvicorn.Server | None = None
         self._task: asyncio.Task[None] | None = None
         self._port: int | None = None
 
@@ -81,8 +83,20 @@ class MailboxShim:
     async def start(self) -> str:
         self._port = _pick_free_port(self._host)
         self._server = self._build_server()
-        self._task = asyncio.create_task(
-            self._server.run_streamable_http_async())
+        app = self._server.streamable_http_app()
+        config = uvicorn.Config(
+            app, host=self._host, port=self._port, log_level="warning")
+        self._userver = uvicorn.Server(config)
+        self._task = asyncio.create_task(self._userver.serve())
+        # Wait until uvicorn has actually bound the socket and is accepting
+        # connections (bounded), so callers never race a not-yet-listening
+        # server (~5s max).
+        for _ in range(500):
+            if self._userver.started:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise RuntimeError("mailbox shim server failed to start")
         return self._base_url()
 
     def _base_url(self) -> str:
@@ -91,11 +105,13 @@ class MailboxShim:
         return f"http://{self._host}:{port}/mcp"
 
     async def stop(self) -> None:
+        if self._userver is not None:
+            # Graceful shutdown: uvicorn closes its listening socket before
+            # serve() returns, unlike cancelling the task (which interrupts
+            # the ASGI lifespan mid-shutdown and leaks the fd/port).
+            self._userver.should_exit = True
         if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+            await self._task
             self._task = None
+        self._userver = None
         self._server = None

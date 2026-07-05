@@ -57,3 +57,27 @@ def test_build_server_constructs_without_raising():
     shim = MailboxShim(client, tid=1)
     server = shim._build_server()
     assert server is not None
+
+
+async def test_start_binds_then_stop_releases_port():
+    """start() must not return until uvicorn is accepting connections, and
+    stop() must fully release the listening socket (not just cancel the
+    task) so the port can be immediately rebound without SO_REUSEADDR."""
+    import socket
+
+    shim = MailboxShim(_FakeClient(), tid=1)
+    url = await shim.start()
+    port = int(url.rsplit(":", 1)[1].split("/")[0])
+
+    # Server is accepting connections right after start() returns.
+    with socket.create_connection(("127.0.0.1", port), timeout=2):
+        pass
+
+    await shim.stop()
+
+    # Port is truly free again: a fresh bind (no SO_REUSEADDR) must succeed.
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", port))
+    finally:
+        s.close()
