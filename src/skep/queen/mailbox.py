@@ -106,19 +106,26 @@ class Mailbox:
         )
         self._conn.commit()
 
-    def read_inbox(self, recipient: str) -> list[Message]:
+    def _fetch_unread(self, recipient: str) -> list[Message]:
         rows = self._conn.execute(
             "SELECT * FROM messages "
             "WHERE recipient = ? AND status = ? "
             "ORDER BY created_at, id",
             (recipient, STATUS_UNREAD),
         ).fetchall()
-        msgs = [_row_to_message(r) for r in rows]
-        if msgs:
-            self._conn.execute(
-                "UPDATE messages SET status = ? "
-                "WHERE recipient = ? AND status = ?",
-                (STATUS_READ, recipient, STATUS_UNREAD),
-            )
-            self._conn.commit()
+        return [_row_to_message(r) for r in rows]
+
+    def _archive(self, ids: list[int]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self._conn.execute(
+            f"UPDATE messages SET status = ? WHERE id IN ({placeholders})",
+            (STATUS_READ, *ids),
+        )
+        self._conn.commit()
+
+    def read_inbox(self, recipient: str) -> list[Message]:
+        msgs = self._fetch_unread(recipient)
+        self._archive([m.id for m in msgs])
         return msgs
