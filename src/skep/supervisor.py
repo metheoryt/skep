@@ -4,12 +4,14 @@ import asyncio
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from skep.agent import AgentProcess, create_worktree
 from skep.config import WorkerConfig
 from skep.db import Registry, Task
 from skep.formatting import activity_line, milestone_message
-from skep.transport import EventSink
+from skep.transport import EventSink, MailboxClient
+from skep.worker.mcp_shim import MailboxShim
 
 
 class CapacityError(Exception):
@@ -24,13 +26,18 @@ def _slug(text: str) -> str:
 class Supervisor:
     def __init__(self, config: WorkerConfig, registry: Registry, sink: EventSink,
                  agent_factory: Callable[..., AgentProcess] = AgentProcess,
-                 worktree_factory: Callable[[Path, Path, str], None] = create_worktree):
+                 worktree_factory: Callable[[Path, Path, str], None] = create_worktree,
+                 mailbox_client: MailboxClient | None = None,
+                 shim_factory: Callable[[MailboxClient, int], MailboxShim] = MailboxShim):
         self._cfg = config
         self._reg = registry
         self._sink = sink
         self._agent_factory = agent_factory
         self._worktree_factory = worktree_factory
+        self._mailbox_client = mailbox_client
+        self._shim_factory = shim_factory
         self._agents: dict[int, AgentProcess] = {}
+        self._shims: dict[int, MailboxShim] = {}
         self._tasks: set[asyncio.Task] = set()
 
     def list_active(self) -> list[Task]:
@@ -52,20 +59,36 @@ class Supervisor:
         worktree_path = self._cfg.worktrees_root / f"{repo}-{tid}"
         self._reg.update(tid, worktree_path=str(worktree_path))
 
+        shim: MailboxShim | None = None
         try:
             self._worktree_factory(repo_path, worktree_path, branch)
             self._reg.log_audit(tid, "spawn", f"{repo}: {task}")
-            agent = self._agent_factory(
+
+            agent_kwargs: dict[str, Any] = dict(
                 task_text=task, cwd=worktree_path,
                 claude_bin=self._cfg.claude_bin,
                 config_dir=self._cfg.claude_config_dir,
             )
+            if self._mailbox_client is not None:
+                shim = self._shim_factory(self._mailbox_client, tid)
+                mcp_url = await shim.start()
+                agent_kwargs["mcp_url"] = mcp_url
+                agent_kwargs["mcp_token"] = None
+
+            agent = self._agent_factory(**agent_kwargs)
             await agent.start()
             self._agents[tid] = agent
+            if shim is not None:
+                self._shims[tid] = shim
             self._reg.update(tid, status="running", pid=agent.pid)
         except Exception as exc:
             self._reg.update(tid, status="failed")
             self._reg.log_audit(tid, "error", f"spawn failed: {exc}")
+            if shim is not None:
+                try:
+                    await shim.stop()
+                except Exception:
+                    pass
             raise
 
         await self._sink.task_started(tid, repo, task)
@@ -118,6 +141,13 @@ class Supervisor:
                 terminal = "killed"
             self._reg.update(task_id, status=terminal)
             self._agents.pop(task_id, None)
+            shim = self._shims.pop(task_id, None)
+            if shim is not None:
+                try:
+                    await shim.stop()
+                except Exception as exc:
+                    self._reg.log_audit(
+                        task_id, "error", f"mailbox shim stop failed: {exc}")
             _ = activity_started  # activity presence is tracked by the queen
             await self._sink.done(task_id, terminal, summary)
 
