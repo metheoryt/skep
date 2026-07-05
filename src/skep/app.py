@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 from collections.abc import Awaitable, Callable
@@ -12,13 +13,22 @@ from aiogram.types import Message, TelegramObject
 
 from skep.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
 from skep.db import Registry
+from skep.queen.assembly import (
+    _ceo_retry_loop,
+    _mailbox_db_path,
+    build_mailbox_service,
+)
 from skep.queen.bookkeeping import Bookkeeping
-from skep.queen.mailbox import Mailbox, MailboxService, SendResult
+from skep.queen.mailbox import Mailbox, MailboxService, SendResult, agent_sender
 from skep.queen.router import QueenRouter, UnknownWorker
 from skep.queen.telegram_sink import QueenSink
 from skep.supervisor import CapacityError, Supervisor
 from skep.telegram_gw import Gateway, build_bot, is_owner
-from skep.transport import InMemoryEventSink, SwitchableMailboxClient
+from skep.transport import (
+    InMemoryEventSink,
+    InMemoryMailboxClient,
+    SwitchableMailboxClient,
+)
 
 _REPLY_ID_RE = re.compile(r"reply id:\s*(\d+)")
 
@@ -69,10 +79,22 @@ async def handle_ceo_reply(
 
 def build_worker_and_router(
     wcfg: WorkerConfig, sink: QueenSink, bk: Bookkeeping, registry: Registry,
+    mailbox_service: MailboxService | None = None,
 ) -> tuple[QueenRouter, Supervisor]:
-    """Wire one queen router + one worker over the in-memory transport (Plan 1)."""
+    """Wire one queen router + one worker over the in-memory transport (Plan 1).
+
+    When a `mailbox_service` is given, the Supervisor's mailbox client is
+    pointed at an in-process target so agent sends are delivered directly
+    (single-process mode); without it the switch has no target and sends raise
+    MailboxUnavailable (the WS path attaches its own target at connect time).
+    """
     worker_sink = InMemoryEventSink(sink, wcfg.host, wcfg.profile)
     mailbox_switch = SwitchableMailboxClient()
+    if mailbox_service is not None:
+        def _sender_for_tid(tid: int) -> str:
+            return agent_sender(bk, wcfg.host, wcfg.profile, tid)
+        mailbox_switch.set_target(
+            InMemoryMailboxClient(mailbox_service, _sender_for_tid))
     supervisor = Supervisor(wcfg, registry, worker_sink, mailbox_client=mailbox_switch)
     router = QueenRouter(bk)
     router.register(wcfg.host, wcfg.profile, supervisor)
@@ -176,11 +198,28 @@ async def main() -> None:
     bot = build_bot(qcfg)
     gateway = Gateway(bot, qcfg)
     bk = Bookkeeping.open(qcfg.bookkeeping_db)
-    sink = QueenSink(gateway, bk)
+    mailbox = Mailbox.open(_mailbox_db_path(qcfg.bookkeeping_db))
+    mailbox_service = build_mailbox_service(qcfg, gateway, bk, mailbox)
+    sink = QueenSink(gateway, bk, mailbox_service=mailbox_service)
     registry = Registry.open(wcfg.db_path)
-    router, _ = build_worker_and_router(wcfg, sink, bk, registry)
-    dp = build_dispatcher(router, qcfg)
-    await dp.start_polling(bot)
+    router, _ = build_worker_and_router(
+        wcfg, sink, bk, registry, mailbox_service=mailbox_service)
+    dp = build_dispatcher(
+        router, qcfg, mailbox_service=mailbox_service, mailbox=mailbox)
+
+    # No aiohttp app on this path (aiogram polling), so run the CEO-retry
+    # sweeper as a background task tied to the polling loop's lifetime.
+    retry_task: asyncio.Task[None] | None = None
+    if qcfg.mailbox_ceo_retry_interval > 0:
+        retry_task = asyncio.create_task(
+            _ceo_retry_loop(mailbox_service, qcfg.mailbox_ceo_retry_interval))
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if retry_task is not None:
+            retry_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await retry_task
 
 
 def run() -> None:

@@ -7,6 +7,7 @@ from skep.app import build_worker_and_router
 from skep.config import WorkerConfig
 from skep.db import Registry
 from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.mailbox import Mailbox, MailboxService
 from skep.supervisor import Supervisor
 from skep.transport import SwitchableMailboxClient
 
@@ -55,6 +56,39 @@ def test_build_worker_and_router_activates_mailbox():
 
     assert isinstance(sup, Supervisor)
     assert isinstance(sup._mailbox_client, SwitchableMailboxClient)  # type: ignore[attr-defined]
+
+
+async def test_build_worker_and_router_wires_in_process_mailbox(tmp_path):
+    """L0.1 #4: given a MailboxService, the single-process assembly must point
+    the Supervisor's SwitchableMailboxClient at an in-process target, so an
+    agent's send is delivered instead of raising MailboxUnavailable (the
+    switch was previously left with no target on this path)."""
+    bk = Bookkeeping.open(":memory:")
+    registry = Registry.open(":memory:")
+    mailbox = Mailbox.open(":memory:")
+
+    delivered = []
+
+    async def deliver_ceo(msg):
+        delivered.append(msg)
+
+    async def alert_ceo(text):
+        pass
+
+    svc = MailboxService(mailbox, bk, set(), deliver_ceo, alert_ceo)
+
+    wcfg = _wcfg(tmp_path)
+    _router, sup = build_worker_and_router(
+        wcfg, FakeQueenSink(), bk, registry, mailbox_service=svc)
+
+    # Seed a running agent so tid -> ref resolves (as a real spawn would).
+    tid = 1
+    bk.add(wcfg.host, wcfg.profile, tid, "repo", "title", 100)
+
+    reply = await sup._mailbox_client.send(  # type: ignore[attr-defined]
+        tid, "ceo", "hi", "body", None)
+    assert reply.ok and reply.status == "delivered"
+    assert len(delivered) == 1
 
 
 async def test_build_worker_and_router_supervisor_starts_shim_on_spawn(tmp_path):
