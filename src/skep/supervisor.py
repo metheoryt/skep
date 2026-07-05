@@ -59,6 +59,7 @@ class Supervisor:
         worktree_path = self._cfg.worktrees_root / f"{repo}-{tid}"
         self._reg.update(tid, worktree_path=str(worktree_path))
 
+        agent: AgentProcess | None = None
         shim: MailboxShim | None = None
         try:
             self._worktree_factory(repo_path, worktree_path, branch)
@@ -81,20 +82,38 @@ class Supervisor:
             if shim is not None:
                 self._shims[tid] = shim
             self._reg.update(tid, status="running", pid=agent.pid)
+
+            # Everything below must succeed for run_events' finally to become
+            # the sole owner of agent/shim teardown. Any failure up to and
+            # including create_task() falls through to the except below,
+            # which must undo the dict commits above and terminate whatever
+            # was already started -- otherwise the shim's live server/socket
+            # and the agent subprocess leak forever (see Task 10 review).
+            await self._sink.task_started(tid, repo, task)
+            t = asyncio.create_task(self.run_events(tid, agent))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
         except Exception as exc:
+            self._agents.pop(tid, None)
+            self._shims.pop(tid, None)
             self._reg.update(tid, status="failed")
             self._reg.log_audit(tid, "error", f"spawn failed: {exc}")
+            if agent is not None:
+                try:
+                    await agent.kill()
+                except Exception as kill_exc:
+                    self._reg.log_audit(
+                        tid, "error",
+                        f"agent kill failed on spawn error: {kill_exc}")
             if shim is not None:
                 try:
                     await shim.stop()
-                except Exception:
-                    pass
+                except Exception as stop_exc:
+                    self._reg.log_audit(
+                        tid, "error",
+                        f"mailbox shim stop failed on spawn error: {stop_exc}")
             raise
 
-        await self._sink.task_started(tid, repo, task)
-        t = asyncio.create_task(self.run_events(tid, agent))
-        self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
         return tid
 
     async def run_events(self, task_id: int, agent: AgentProcess) -> None:

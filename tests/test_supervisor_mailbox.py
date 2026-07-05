@@ -229,6 +229,95 @@ async def test_kill_leads_to_shim_stop(tmp_path):
     assert tid not in sup._shims
 
 
+async def test_spawn_agent_start_failure_stops_shim(tmp_path):
+    """If agent construction/start fails after the shim is up, the shim must
+    be stopped and no tid entry must be left in _shims/_agents."""
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    sink = RecordingSink()
+    shims = []
+
+    def shim_factory(client, tid):
+        s = FakeShim(client, tid)
+        shims.append(s)
+        return s
+
+    def agent_factory(**kwargs):
+        raise RuntimeError("boom: agent construction failed")
+
+    sup = Supervisor(
+        cfg, reg, sink, agent_factory=agent_factory,
+        worktree_factory=lambda *a, **k: None,
+        mailbox_client=FakeMailboxClient(), shim_factory=shim_factory,
+    )
+
+    try:
+        await sup.spawn("nix", "clean nvidia")
+        assert False, "spawn should have raised"
+    except RuntimeError:
+        pass
+
+    assert len(shims) == 1
+    assert shims[0].started
+    assert shims[0].stopped
+    assert sup._shims == {}
+    assert sup._agents == {}
+    assert sup._tasks == set()
+
+
+async def test_spawn_sink_failure_stops_shim_and_agent(tmp_path):
+    """If task_started() (called after agent/shim are committed to the dicts)
+    raises, spawn must terminate the agent, stop the shim, and leave no tid
+    entry in _shims/_agents -- run_events never gets scheduled to do it."""
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    shims = []
+    agents = []
+
+    class FailingSink:
+        async def task_started(self, local_id, repo, title):
+            raise RuntimeError("boom: sink failed")
+
+        async def activity(self, local_id, line):
+            pass
+
+        async def milestone(self, local_id, text):
+            pass
+
+        async def done(self, local_id, status, summary):
+            pass
+
+    def shim_factory(client, tid):
+        s = FakeShim(client, tid)
+        shims.append(s)
+        return s
+
+    def agent_factory(**kwargs):
+        a = FakeAgent(**kwargs)
+        agents.append(a)
+        return a
+
+    sup = Supervisor(
+        cfg, reg, sink=FailingSink(), agent_factory=agent_factory,
+        worktree_factory=lambda *a, **k: None,
+        mailbox_client=FakeMailboxClient(), shim_factory=shim_factory,
+    )
+
+    try:
+        await sup.spawn("nix", "clean nvidia")
+        assert False, "spawn should have raised"
+    except RuntimeError:
+        pass
+
+    assert len(shims) == 1
+    assert shims[0].stopped
+    assert len(agents) == 1
+    assert agents[0].killed
+    assert sup._shims == {}
+    assert sup._agents == {}
+    assert sup._tasks == set()
+
+
 async def test_shim_stop_failure_does_not_crash_run_events(tmp_path):
     """A stop() exception during teardown must be swallowed, not propagated."""
     cfg = _cfg(tmp_path)
