@@ -202,12 +202,35 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   defense-in-depth vs passive port-scan, fully effective only under UID isolation.
   **NEW L0.2 FOLLOW-UP: per-agent UID/sandbox isolation** (the real fix for
   co-located spoofing; deliver the shim token off-argv at the same time).
-  Still-open original L0.1 items: (3) recipient-gone TOCTOU. (4)
-  `build_worker_and_router` single-process path has no in-process MailboxService
-  target (raises MailboxUnavailable; real skepd+queen path works). (5)
-  MailboxShim.stop() `except Exception` misses SystemExit from a uvicorn
-  bind-collision.
-  **Next step: L1 memory (reuses the req/reply layer), or L0.2 / remaining L0.1.**
+  **L0.1 CLOSE-OUT DONE 2026-07-05 (branch `feat/skep-l0.1-closeout`, 3 TDD
+  commits; 217 tests pass `-m "not mdns"`, `uvx pyright src` 0 errors, ruff
+  clean):** the three still-open L0.1 items are fixed. (5) `MailboxShim.stop()`
+  now `except (Exception, SystemExit)` — deliberately NOT bare `BaseException`,
+  so uvicorn's bind-collision SystemExit is swallowed but `CancelledError` still
+  propagates. (3) recipient-gone TOCTOU: `handle_send` re-checks IC recipient
+  liveness (`resolve_address`) right after `insert` and dead-letters if the
+  agent went terminal — DEFENSE-IN-DEPTH, not a live bug (verified: the WS
+  `_dispatch_mailbox_send` awaits `handle_send` inline on the queen event loop
+  and `handle_send` runs resolve→insert with ZERO awaits between, so `on_done`→
+  `handle_recipient_gone` can't interleave today; the guard closes the window if
+  an await is ever added there). (4) single-process path had an inert mailbox
+  (switch built, target never set → `MailboxUnavailable`): extracted the queen's
+  MailboxService assembly into **`src/skep/queen/assembly.py`**
+  (`build_mailbox_service` + `make_ceo_callbacks`/`_ceo_retry_loop`/
+  `_install_ceo_retry`/`_mailbox_db_path`), shared by BOTH `build_queen` and the
+  single-process `app.main`; `build_worker_and_router` takes an optional
+  `mailbox_service` and points the switch at an `InMemoryMailboxClient`; `main`
+  threads it through QueenSink/build_dispatcher and runs the CEO-retry sweeper as
+  a background task (no aiohttp app on the polling path). `assembly.py` NEVER
+  imports `skep.app` → no import cycle (`queen.app` still imports `build_dispatcher`
+  from `skep.app`); the CEO helpers are re-exported from `skep.queen.app` for
+  existing import sites. `main()` glue itself is untested (blocks on
+  `start_polling`) — verified at the `build_worker_and_router` assembly seam, not
+  end-to-end. Minor recorded asymmetry: `InMemoryMailboxClient.send` lets
+  `agent_sender`'s `ValueError` (unknown tid) propagate, whereas the WS path
+  returns a clean rejected ack — unreachable in practice (bk row exists by spawn
+  time) and pre-existing to L0.1 #4.
+  **Next step: L1 memory (reuses the req/reply layer), or L0.2 UID isolation.**
   Two execution gotchas from Plan 2 (kept for reference): (a) the plan
   predated this repo's pyright governance, so plan-faithful rewrites regressed
   `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
