@@ -313,6 +313,25 @@ class MailboxService:
             sender=sender, recipient=recipient, subject=subject,
             body=body, created_at=now, in_reply_to=in_reply_to, hops=hops)
 
+        if res.kind == "ic":
+            # Recipient-gone guard (defense-in-depth). resolve_address above
+            # confirmed the IC recipient was active, but nothing serializes
+            # that check against the recipient finishing (on_done ->
+            # handle_recipient_gone). Today handle_send runs resolve->insert
+            # with no await between them, so the interleave can't fire on the
+            # single queen event loop -- but re-checking liveness right after
+            # insert closes the window deterministically if an await is ever
+            # introduced here, rather than leaving the message unread in a
+            # finished agent's inbox forever.
+            if resolve_address(to, self._bk, self._managers).kind != "ic":
+                self._mailbox.dead_letter_for(
+                    mid, f"recipient {recipient} finished before delivery")
+                await self._safe_alert(
+                    f"⚠️ message to agent {recipient} undeliverable: "
+                    f"recipient finished before delivery")
+                return SendResult(False, mid, "recipient finished",
+                                  "dead_letter")
+
         if res.kind == "ceo":
             # Push is decoupled from acceptance: redeliver_ceo drains all
             # pending CEO mail in order and marks each read only after a
