@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+# An IC agent is addressable only while active. Mirrors bookkeeping's active
+# states; any terminal (done/failed/killed) or unknown status is non-addressable
+# so mail is never routed to a stopped agent (fail closed).
+_ADDRESSABLE_STATUSES = frozenset({"spawning", "running"})
+
 
 class _Entryish(Protocol):
     status: str
@@ -45,9 +50,9 @@ def resolve_address(
         if entry is None:
             return Resolution(kind="invalid", ref=None, canonical=to,
                               error=f"no such agent ref {ref}")
-        if entry.status == "done":
+        if entry.status not in _ADDRESSABLE_STATUSES:
             return Resolution(kind="invalid", ref=None, canonical=to,
-                              error=f"agent {ref} has finished")
+                              error=f"agent {ref} is not active ({entry.status})")
         return Resolution(kind="ic", ref=ref, canonical=str(ref), error=None)
 
     return Resolution(kind="invalid", ref=None, canonical=to,

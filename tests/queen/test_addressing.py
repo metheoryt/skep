@@ -54,3 +54,19 @@ def test_ic_missing_is_invalid():
 def test_garbage_invalid():
     r = resolve_address("not-an-address", _FakeBk({}), managers=set())
     assert r.kind == "invalid"
+
+
+def test_ic_failed_is_invalid():
+    bk = _FakeBk({3: _Entry(ref=3, status="failed")})
+    assert resolve_address("3", bk, managers=set()).kind == "invalid"
+
+
+def test_ic_killed_is_invalid():
+    bk = _FakeBk({3: _Entry(ref=3, status="killed")})
+    assert resolve_address("3", bk, managers=set()).kind == "invalid"
+
+
+def test_ic_spawning_is_addressable():
+    bk = _FakeBk({3: _Entry(ref=3, status="spawning")})
+    r = resolve_address("3", bk, managers=set())
+    assert r.kind == "ic" and r.ref == 3 and r.canonical == "3"
