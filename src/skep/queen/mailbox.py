@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Protocol
+
+from skep.queen.addressing import resolve_address
 
 STATUS_UNREAD = "unread"
 STATUS_READ = "read"
@@ -162,3 +167,142 @@ class Mailbox:
             (STATUS_DEAD, reason, message_id),
         )
         self._conn.commit()
+
+
+class _Entryish(Protocol):
+    ref: int
+    status: str
+
+
+class _Bookkeepingish(Protocol):
+    def get(self, ref: int) -> _Entryish | None: ...
+    def by_worker_task(
+        self, host: str, profile: str, local_id: int
+    ) -> _Entryish | None: ...
+
+
+@dataclass
+class SendResult:
+    ok: bool
+    message_id: int | None
+    error: str | None
+    status: str  # "delivered" | "duplicate" | "rejected" | "dead_letter"
+
+
+def agent_sender(
+    bookkeeping: _Bookkeepingish,
+    host: str,
+    profile: str,
+    local_id: int,
+) -> str:
+    entry = bookkeeping.by_worker_task(host, profile, local_id)
+    if entry is None:
+        raise ValueError(
+            f"no bookkeeping entry for {host}/{profile}/{local_id}"
+        )
+    return str(entry.ref)
+
+
+class MailboxService:
+    def __init__(
+        self,
+        mailbox: Mailbox,
+        bookkeeping: _Bookkeepingish,
+        managers: set[str],
+        deliver_ceo: Callable[[Message], Awaitable[None]],
+        alert_ceo: Callable[[str], Awaitable[None]],
+        *,
+        rate_limit: int = 20,
+        rate_window: float = 60.0,
+        depth_cap: int = 10,
+        dedupe_window: float = 60.0,
+        body_cap: int = 16384,
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        self._mailbox = mailbox
+        self._bk = bookkeeping
+        self._managers = managers
+        self._deliver_ceo = deliver_ceo
+        self._alert_ceo = alert_ceo
+        self._rate_limit = rate_limit
+        self._rate_window = rate_window
+        self._depth_cap = depth_cap
+        self._dedupe_window = dedupe_window
+        self._body_cap = body_cap
+        self._now = now
+
+    async def handle_send(
+        self,
+        sender: str,
+        to: str,
+        subject: str,
+        body: str,
+        in_reply_to: int | None = None,
+    ) -> SendResult:
+        now = self._now()
+
+        if len(body.encode("utf-8")) > self._body_cap:
+            return SendResult(False, None,
+                              f"body too large (>{self._body_cap} bytes)",
+                              "rejected")
+
+        res = resolve_address(to, self._bk, self._managers)
+        if res.kind == "invalid":
+            return SendResult(False, None, res.error, "rejected")
+        recipient = res.canonical
+
+        recent = self._mailbox.count_recent(sender, since=now - self._rate_window)
+        if recent >= self._rate_limit:
+            return SendResult(
+                False, None,
+                f"rate limit exceeded ({self._rate_limit}/{self._rate_window:g}s)",
+                "rejected")
+
+        dup = self._mailbox.find_duplicate(
+            sender, recipient, subject, body,
+            since=now - self._dedupe_window)
+        if dup is not None:
+            return SendResult(True, dup.id, None, "duplicate")
+
+        parent_hops = 0
+        if in_reply_to is not None:
+            parent = self._mailbox.get(in_reply_to)
+            if parent is not None:
+                parent_hops = parent.hops
+        hops = parent_hops + 1 if in_reply_to is not None else 0
+
+        if hops > self._depth_cap:
+            mid = self._mailbox.insert(
+                sender=sender, recipient=recipient, subject=subject,
+                body=body, created_at=now, in_reply_to=in_reply_to,
+                hops=hops, status=STATUS_DEAD,
+                dead_letter_reason=f"depth cap exceeded ({hops}>{self._depth_cap})")
+            await self._alert_ceo(
+                f"⚠️ mailbox loop stopped: {sender}→{recipient} "
+                f"'{subject}' exceeded depth cap ({hops})")
+            return SendResult(False, mid,
+                              "depth cap exceeded", "dead_letter")
+
+        mid = self._mailbox.insert(
+            sender=sender, recipient=recipient, subject=subject,
+            body=body, created_at=now, in_reply_to=in_reply_to, hops=hops)
+
+        if res.kind == "ceo":
+            msg = self._mailbox.get(mid)
+            assert msg is not None
+            await self._deliver_ceo(msg)
+
+        return SendResult(True, mid, None, "delivered")
+
+    async def handle_read(self, recipient: str) -> list[Message]:
+        return self._mailbox.read_inbox(recipient)
+
+    async def handle_recipient_gone(self, ref: int) -> None:
+        pending = self._mailbox.read_inbox(str(ref))
+        # read_inbox archived them as READ; re-mark as dead-letter.
+        for m in pending:
+            self._mailbox.dead_letter_for(m.id, f"recipient {ref} finished")
+        if pending:
+            await self._alert_ceo(
+                f"⚠️ {len(pending)} message(s) undeliverable: "
+                f"agent {ref} finished before reading its inbox")
