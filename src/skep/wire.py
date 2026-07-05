@@ -74,3 +74,53 @@ def panic_msg() -> dict[str, Any]:
 
 def ls_request_msg() -> dict[str, Any]:
     return {"t": LS_REQUEST}
+
+
+MAILBOX_SEND = "mailbox_send"
+MAILBOX_ACK = "mailbox_ack"
+INBOX_READ = "inbox_read"
+INBOX_REPLY = "inbox_reply"
+
+
+def mailbox_send_msg(
+    req_id: str,
+    tid: int,
+    to: str,
+    subject: str,
+    body: str,
+    in_reply_to: int | None,
+) -> dict[str, Any]:
+    return {
+        "t": MAILBOX_SEND,
+        "req_id": req_id,
+        "tid": tid,
+        "to": to,
+        "subject": subject,
+        "body": body,
+        "in_reply_to": in_reply_to,
+    }
+
+
+def mailbox_ack_msg(
+    req_id: str,
+    ok: bool,
+    message_id: int | None,
+    error: str | None,
+    status: str,
+) -> dict[str, Any]:
+    return {
+        "t": MAILBOX_ACK,
+        "req_id": req_id,
+        "ok": ok,
+        "message_id": message_id,
+        "error": error,
+        "status": status,
+    }
+
+
+def inbox_read_msg(req_id: str, tid: int) -> dict[str, Any]:
+    return {"t": INBOX_READ, "req_id": req_id, "tid": tid}
+
+
+def inbox_reply_msg(req_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"t": INBOX_REPLY, "req_id": req_id, "messages": messages}
