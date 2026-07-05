@@ -38,6 +38,13 @@ class QueenConfig:
     public_url: str | None = None
     advertise_mdns: bool = True
     bookkeeping_db: str = "queen.sqlite"
+    # Mailbox loop-prevention knobs
+    managers: frozenset[str] = frozenset()
+    mailbox_rate_limit: int = 20
+    mailbox_rate_window: float = 60.0
+    mailbox_depth_cap: int = 10
+    mailbox_dedupe_window: float = 60.0
+    mailbox_body_cap: int = 16384
 
 
 def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
@@ -57,6 +64,10 @@ def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
 
 
 def load_queen_config(env: Mapping[str, str]) -> QueenConfig:
+    managers_raw = env.get("SKEP_MANAGERS", "")
+    managers = frozenset(
+        name.strip() for name in managers_raw.split(",") if name.strip()
+    )
     return QueenConfig(
         bot_token=env["SKEP_BOT_TOKEN"],
         owner_id=int(env["SKEP_OWNER_ID"]),
@@ -67,4 +78,10 @@ def load_queen_config(env: Mapping[str, str]) -> QueenConfig:
         public_url=env.get("SKEP_PUBLIC_URL"),
         advertise_mdns=_as_bool(env.get("SKEP_ADVERTISE_MDNS"), True),
         bookkeeping_db=env.get("SKEP_QUEEN_DB", "queen.sqlite"),
+        managers=managers,
+        mailbox_rate_limit=int(env.get("SKEP_MAILBOX_RATE_LIMIT", "20")),
+        mailbox_rate_window=float(env.get("SKEP_MAILBOX_RATE_WINDOW", "60")),
+        mailbox_depth_cap=int(env.get("SKEP_MAILBOX_DEPTH_CAP", "10")),
+        mailbox_dedupe_window=float(env.get("SKEP_MAILBOX_DEDUPE_WINDOW", "60")),
+        mailbox_body_cap=int(env.get("SKEP_MAILBOX_BODY_CAP", "16384")),
     )

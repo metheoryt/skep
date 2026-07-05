@@ -119,3 +119,38 @@ def test_worker_config_transport_overrides():
     assert cfg.queen_url == "wss://skep.cyphy.kz/ws"
     assert cfg.shared_secret == "s3cr3t"
     assert cfg.use_mdns is False
+
+
+def _base_env():
+    return {
+        "SKEP_BOT_TOKEN": "t",
+        "SKEP_OWNER_ID": "1",
+        "SKEP_GROUP_CHAT_ID": "-100",
+        "SKEP_SHARED_SECRET": "s",
+    }
+
+
+def test_managers_default_empty():
+    cfg = load_queen_config(_base_env())
+    assert cfg.managers == frozenset()
+    assert cfg.mailbox_rate_limit == 20
+    assert cfg.mailbox_depth_cap == 10
+    assert cfg.mailbox_body_cap == 16384
+
+
+def test_managers_parsed_and_overrides():
+    env = _base_env() | {
+        "SKEP_MANAGERS": "alice, bob ,carol",
+        "SKEP_MAILBOX_RATE_LIMIT": "5",
+        "SKEP_MAILBOX_RATE_WINDOW": "30",
+        "SKEP_MAILBOX_DEPTH_CAP": "3",
+        "SKEP_MAILBOX_DEDUPE_WINDOW": "15",
+        "SKEP_MAILBOX_BODY_CAP": "1024",
+    }
+    cfg = load_queen_config(env)
+    assert cfg.managers == frozenset({"alice", "bob", "carol"})
+    assert cfg.mailbox_rate_limit == 5
+    assert cfg.mailbox_rate_window == 30.0
+    assert cfg.mailbox_depth_cap == 3
+    assert cfg.mailbox_dedupe_window == 15.0
+    assert cfg.mailbox_body_cap == 1024
