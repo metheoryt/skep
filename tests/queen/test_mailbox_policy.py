@@ -48,3 +48,24 @@ def test_dead_letter_for_sets_status_and_reason():
     msg = mb.get(mid)
     assert msg.status == STATUS_DEAD
     assert msg.dead_letter_reason == "loop depth exceeded"
+
+
+def test_find_duplicate_excludes_dead_letters():
+    mb = _mb()
+    mid = _ins(mb, subject="hi", body="there", created_at=10.0)
+    mb.dead_letter_for(mid, "loop")
+    assert mb.find_duplicate("mgr:a", "ceo", "hi", "there", since=5.0) is None
+
+
+def test_find_duplicate_returns_most_recent():
+    mb = _mb()
+    _ins(mb, subject="hi", body="there", created_at=10.0)
+    newer = _ins(mb, subject="hi", body="there", created_at=20.0)
+    dup = mb.find_duplicate("mgr:a", "ceo", "hi", "there", since=5.0)
+    assert dup is not None and dup.id == newer
+
+
+def test_count_recent_boundary_is_inclusive():
+    mb = _mb()
+    _ins(mb, created_at=10.0)
+    assert mb.count_recent("mgr:a", since=10.0) == 1
