@@ -219,3 +219,40 @@ async def test_queen_dispatches_inbox_read_to_service():
                                 "body": "b", "created_at": 1.0,
                                 "in_reply_to": None}]
     assert svc.read_calls == ["1"]
+
+
+async def test_queen_inbox_read_without_service_replies_empty():
+    bk = Bookkeeping.open(":memory:")
+    router = QueenRouter(bk)
+    server, url = await _serve(router, _NullInbox(), bookkeeping=bk, mailbox_service=None)
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.ws_connect(url) as ws:
+                await _client_handshake(ws)
+                await ws.send_str(wire.encode(
+                    wire.register_msg("g16", "work", "0.1.0", [])))
+                await ws.send_str(wire.encode(wire.inbox_read_msg("r5", 1)))
+                got = wire.decode((await ws.receive()).data)
+    finally:
+        await server.close()
+    assert got["t"] == wire.INBOX_REPLY
+    assert got["messages"] == []
+
+
+async def test_queen_inbox_read_unknown_sender_replies_empty():
+    bk = Bookkeeping.open(":memory:")
+    svc = _FakeMailboxService()
+    router = QueenRouter(bk)
+    server, url = await _serve(router, _NullInbox(), bookkeeping=bk, mailbox_service=svc)
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.ws_connect(url) as ws:
+                await _client_handshake(ws)
+                await ws.send_str(wire.encode(
+                    wire.register_msg("g16", "work", "0.1.0", [])))
+                await ws.send_str(wire.encode(wire.inbox_read_msg("r6", 99)))
+                got = wire.decode((await ws.receive()).data)
+    finally:
+        await server.close()
+    assert got["t"] == wire.INBOX_REPLY
+    assert got["messages"] == []
