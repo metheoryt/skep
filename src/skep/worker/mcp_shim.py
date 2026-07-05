@@ -158,7 +158,11 @@ class MailboxShim:
         if self._task is not None:
             try:
                 await self._task
-            except Exception:
+            except (Exception, SystemExit):
+                # uvicorn calls sys.exit() on a bind collision, so serve() can
+                # finish with SystemExit (a BaseException, not Exception).
+                # Swallow it here -- but NOT bare BaseException: CancelledError
+                # must still propagate so cooperative shutdown isn't broken.
                 pass
         self._userver = None
         self._task = None
