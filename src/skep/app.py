@@ -18,7 +18,7 @@ from skep.queen.router import QueenRouter, UnknownWorker
 from skep.queen.telegram_sink import QueenSink
 from skep.supervisor import CapacityError, Supervisor
 from skep.telegram_gw import Gateway, build_bot, is_owner
-from skep.transport import InMemoryEventSink
+from skep.transport import InMemoryEventSink, SwitchableMailboxClient
 
 _REPLY_ID_RE = re.compile(r"reply id:\s*(\d+)")
 
@@ -72,7 +72,8 @@ def build_worker_and_router(
 ) -> tuple[QueenRouter, Supervisor]:
     """Wire one queen router + one worker over the in-memory transport (Plan 1)."""
     worker_sink = InMemoryEventSink(sink, wcfg.host, wcfg.profile)
-    supervisor = Supervisor(wcfg, registry, worker_sink)
+    mailbox_switch = SwitchableMailboxClient()
+    supervisor = Supervisor(wcfg, registry, worker_sink, mailbox_client=mailbox_switch)
     router = QueenRouter(bk)
     router.register(wcfg.host, wcfg.profile, supervisor)
     return router, supervisor
