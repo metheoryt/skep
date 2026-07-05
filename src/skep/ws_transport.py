@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
-from typing import Any
+from typing import Any, Protocol
 
 import aiohttp
 from aiohttp import web
@@ -11,9 +12,17 @@ from aiohttp import web
 from skep import wire
 from skep.auth import AuthError, handshake_client, handshake_server
 from skep.config import WorkerConfig
+from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.mailbox import MailboxService, agent_sender
 from skep.queen.router import QueenRouter
 from skep.supervisor import CapacityError, Supervisor
-from skep.transport import QueenInbox, SwitchableEventSink
+from skep.transport import (
+    MailboxUnavailable,
+    QueenInbox,
+    SendReply,
+    SwitchableEventSink,
+    SwitchableMailboxClient,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +50,15 @@ class RemoteWorker:
 
 class QueenWsServer:
     def __init__(self, router: QueenRouter, inbox: QueenInbox, secret: str,
-                 *, heartbeat: float = 20.0):
+                 *, heartbeat: float = 20.0,
+                 bookkeeping: Bookkeeping | None = None,
+                 mailbox_service: MailboxService | None = None):
         self._router = router
         self._inbox = inbox
         self._secret = secret
         self._heartbeat = heartbeat
+        self._bk = bookkeeping
+        self._mailbox_service = mailbox_service
 
     def attach(self, app: web.Application, path: str = "/ws") -> None:
         app.router.add_get(path, self._handle)
@@ -93,7 +106,7 @@ class QueenWsServer:
                 if msg.type != web.WSMsgType.TEXT:
                     continue
                 try:
-                    await self._dispatch(host, profile, wire.decode(msg.data))
+                    await self._dispatch(host, profile, ws, wire.decode(msg.data))
                 except Exception:
                     logger.exception(
                         "error dispatching message from %s/%s: %r",
@@ -103,6 +116,7 @@ class QueenWsServer:
         return ws
 
     async def _dispatch(self, host: str, profile: str,
+                        ws: web.WebSocketResponse,
                         msg: dict[str, Any]) -> None:
         t = msg.get("t")
         if t == wire.HEARTBEAT:
@@ -122,6 +136,49 @@ class QueenWsServer:
                 str(msg["status"]), str(msg["summary"]))
         elif t == wire.SPAWN_REJECTED:
             await self._inbox.on_spawn_rejected(host, profile, str(msg["reason"]))
+        elif t == wire.MAILBOX_SEND:
+            await self._dispatch_mailbox_send(host, profile, ws, msg)
+        elif t == wire.INBOX_READ:
+            await self._dispatch_inbox_read(host, profile, ws, msg)
+
+    async def _dispatch_mailbox_send(self, host: str, profile: str,
+                                     ws: web.WebSocketResponse,
+                                     msg: dict[str, Any]) -> None:
+        req_id = str(msg["req_id"])
+        if self._mailbox_service is None or self._bk is None:
+            await ws.send_str(wire.encode(wire.mailbox_ack_msg(
+                req_id, False, None, "mailbox unavailable", "rejected")))
+            return
+        try:
+            sender = agent_sender(self._bk, host, profile, int(msg["tid"]))
+        except ValueError as exc:
+            await ws.send_str(wire.encode(wire.mailbox_ack_msg(
+                req_id, False, None, str(exc), "rejected")))
+            return
+        res = await self._mailbox_service.handle_send(
+            sender=sender, to=str(msg["to"]), subject=str(msg["subject"]),
+            body=str(msg["body"]), in_reply_to=msg.get("in_reply_to"))
+        await ws.send_str(wire.encode(wire.mailbox_ack_msg(
+            req_id, res.ok, res.message_id, res.error, res.status)))
+
+    async def _dispatch_inbox_read(self, host: str, profile: str,
+                                   ws: web.WebSocketResponse,
+                                   msg: dict[str, Any]) -> None:
+        req_id = str(msg["req_id"])
+        if self._mailbox_service is None or self._bk is None:
+            await ws.send_str(wire.encode(wire.inbox_reply_msg(req_id, [])))
+            return
+        try:
+            sender = agent_sender(self._bk, host, profile, int(msg["tid"]))
+        except ValueError:
+            await ws.send_str(wire.encode(wire.inbox_reply_msg(req_id, [])))
+            return
+        msgs = await self._mailbox_service.handle_read(sender)
+        await ws.send_str(wire.encode(wire.inbox_reply_msg(
+            req_id,
+            [{"id": m.id, "sender": m.sender, "subject": m.subject,
+              "body": m.body, "created_at": m.created_at,
+              "in_reply_to": m.in_reply_to} for m in msgs])))
 
 
 class WsEventSink:
@@ -166,12 +223,14 @@ class WorkerWsClient:
 
     def __init__(self, config: WorkerConfig, supervisor: Supervisor,
                  switch: SwitchableEventSink, secret: str,
-                 *, heartbeat: float = 20.0):
+                 *, heartbeat: float = 20.0,
+                 mailbox_switch: SwitchableMailboxClient | None = None):
         self._cfg = config
         self._sup = supervisor
         self._switch = switch
         self._secret = secret
         self._heartbeat = heartbeat
+        self._mailbox_switch = mailbox_switch
 
     def _active_payload(self) -> list[dict[str, Any]]:
         return [{"local_id": t.id, "repo": t.repo, "title": t.task}
@@ -200,13 +259,20 @@ class WorkerWsClient:
                 self._cfg.host, self._cfg.profile, WORKER_VERSION,
                 self._active_payload()))
             self._switch.target = WsEventSink(ws)
+            mailbox_client = WsMailboxClient(ws)
+            if self._mailbox_switch is not None:
+                self._mailbox_switch.set_target(mailbox_client)
             hb = asyncio.create_task(self._heartbeat_loop(ws))
             try:
                 async for msg in ws:
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         continue
                     try:
-                        await self._on_command(ws, wire.decode(msg.data))
+                        decoded = wire.decode(msg.data)
+                        if decoded.get("t") in (wire.MAILBOX_ACK, wire.INBOX_REPLY):
+                            mailbox_client.resolve(decoded)
+                            continue
+                        await self._on_command(ws, decoded)
                     except Exception:
                         logger.exception(
                             "error handling command from queen: %r", msg.data)
@@ -215,6 +281,9 @@ class WorkerWsClient:
                 with contextlib.suppress(asyncio.CancelledError):
                     await hb
                 self._switch.target = None
+                mailbox_client.fail_all("link down")
+                if self._mailbox_switch is not None:
+                    self._mailbox_switch.set_target(None)
 
     async def run(self, *, max_backoff: float = 30.0, _once: bool = False) -> None:
         backoff = 0.5
@@ -243,3 +312,76 @@ class WorkerWsClient:
             await self._sup.kill(int(msg["task_id"]))
         elif t == wire.PANIC:
             await self._sup.panic()
+
+
+class _MailboxWs(Protocol):
+    """Structural subset of a websocket the mailbox client needs to send on."""
+
+    async def send_str(self, data: str) -> None: ...
+
+
+class WsMailboxClient:
+    """Worker-side MailboxClient with req_id/Future correlation over one WS.
+
+    `send`/`read` register a Future keyed by a locally-minted req_id, send
+    the frame, then await the Future with a bounded timeout so a queen that
+    never answers can't hang the caller forever. `resolve` (called from the
+    WorkerWsClient receive loop for MAILBOX_ACK/INBOX_REPLY frames) completes
+    the matching Future. `fail_all` (called on link-down) resolves every
+    still-pending Future to a retryable error — the other half of the
+    no-deadlock guarantee.
+    """
+
+    def __init__(self, ws: _MailboxWs, timeout: float = 30.0) -> None:
+        self._ws = ws
+        self._timeout = timeout
+        self._counter = itertools.count(1)
+        self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+
+    def _new_req(self) -> tuple[str, asyncio.Future[dict[str, Any]]]:
+        req_id = f"m{next(self._counter)}"
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._pending[req_id] = fut
+        return req_id, fut
+
+    def resolve(self, msg: dict[str, Any]) -> None:
+        fut = self._pending.pop(msg.get("req_id", ""), None)
+        if fut is not None and not fut.done():
+            fut.set_result(msg)
+
+    def fail_all(self, reason: str) -> None:
+        pending, self._pending = self._pending, {}
+        for fut in pending.values():
+            if not fut.done():
+                fut.set_result({"__error__": reason})
+
+    async def send(
+        self, tid: int, to: str, subject: str, body: str,
+        in_reply_to: int | None,
+    ) -> SendReply:
+        req_id, fut = self._new_req()
+        await self._ws.send_str(wire.encode(
+            wire.mailbox_send_msg(req_id, tid, to, subject, body, in_reply_to)))
+        try:
+            msg = await asyncio.wait_for(fut, self._timeout)
+        except asyncio.TimeoutError:
+            self._pending.pop(req_id, None)
+            return SendReply(False, None,
+                             "queen did not respond (retryable)", "rejected")
+        if "__error__" in msg:
+            return SendReply(False, None,
+                             f"{msg['__error__']} (retryable)", "rejected")
+        return SendReply(msg["ok"], msg["message_id"], msg["error"], msg["status"])
+
+    async def read(self, tid: int) -> list[dict[str, Any]]:
+        req_id, fut = self._new_req()
+        await self._ws.send_str(wire.encode(wire.inbox_read_msg(req_id, tid)))
+        try:
+            msg = await asyncio.wait_for(fut, self._timeout)
+        except asyncio.TimeoutError:
+            self._pending.pop(req_id, None)
+            raise MailboxUnavailable(
+                "queen did not respond (retryable)") from None
+        if "__error__" in msg:
+            raise MailboxUnavailable(msg["__error__"])
+        return msg["messages"]

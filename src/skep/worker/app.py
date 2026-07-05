@@ -9,15 +9,17 @@ from skep.config import WorkerConfig, load_worker_config
 from skep.db import Registry
 from skep.discovery import resolve_queen_url
 from skep.supervisor import Supervisor
-from skep.transport import SwitchableEventSink
+from skep.transport import SwitchableEventSink, SwitchableMailboxClient
 from skep.ws_transport import WorkerWsClient
 
 
 def build_worker(wcfg: WorkerConfig) -> tuple[Supervisor, SwitchableEventSink, WorkerWsClient]:
     registry = Registry.open(wcfg.db_path)
     switch = SwitchableEventSink()
-    supervisor = Supervisor(wcfg, registry, switch)
-    client = WorkerWsClient(wcfg, supervisor, switch, wcfg.shared_secret)
+    mailbox_switch = SwitchableMailboxClient()
+    supervisor = Supervisor(wcfg, registry, switch, mailbox_client=mailbox_switch)
+    client = WorkerWsClient(wcfg, supervisor, switch, wcfg.shared_secret,
+                             mailbox_switch=mailbox_switch)
     return supervisor, switch, client
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -12,11 +13,25 @@ from aiogram.types import Message, TelegramObject
 from skep.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
 from skep.db import Registry
 from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.mailbox import Mailbox, MailboxService, SendResult
 from skep.queen.router import QueenRouter, UnknownWorker
 from skep.queen.telegram_sink import QueenSink
 from skep.supervisor import CapacityError, Supervisor
 from skep.telegram_gw import Gateway, build_bot, is_owner
-from skep.transport import InMemoryEventSink
+from skep.transport import InMemoryEventSink, SwitchableMailboxClient
+
+_REPLY_ID_RE = re.compile(r"reply id:\s*(\d+)")
+
+
+def _extract_reply_id(text: str) -> int | None:
+    """Extract the mailbox id from a CEO-delivery's 'reply id: <n>' footer.
+
+    Uses the LAST match: deliver_ceo always appends this footer AFTER the
+    lower-trust, sender-controlled subject/body, so an injected earlier
+    'reply id: N' in message content can never win (prevents reply misrouting).
+    """
+    matches = _REPLY_ID_RE.findall(text)
+    return int(matches[-1]) if matches else None
 
 
 def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
@@ -39,18 +54,37 @@ def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
     return host, profile, repo, task
 
 
+async def handle_ceo_reply(
+    service: MailboxService,
+    in_reply_to: int | None,
+    to: str,
+    subject: str,
+    body: str,
+) -> SendResult:
+    """Forward an owner-authored Telegram reply into the mailbox as `ceo`."""
+    return await service.handle_send(
+        sender="ceo", to=to, subject=subject, body=body,
+        in_reply_to=in_reply_to)
+
+
 def build_worker_and_router(
     wcfg: WorkerConfig, sink: QueenSink, bk: Bookkeeping, registry: Registry,
 ) -> tuple[QueenRouter, Supervisor]:
     """Wire one queen router + one worker over the in-memory transport (Plan 1)."""
     worker_sink = InMemoryEventSink(sink, wcfg.host, wcfg.profile)
-    supervisor = Supervisor(wcfg, registry, worker_sink)
+    mailbox_switch = SwitchableMailboxClient()
+    supervisor = Supervisor(wcfg, registry, worker_sink, mailbox_client=mailbox_switch)
     router = QueenRouter(bk)
     router.register(wcfg.host, wcfg.profile, supervisor)
     return router, supervisor
 
 
-def build_dispatcher(router: QueenRouter, config: QueenConfig) -> Dispatcher:
+def build_dispatcher(
+    router: QueenRouter,
+    config: QueenConfig,
+    mailbox_service: MailboxService | None = None,
+    mailbox: Mailbox | None = None,
+) -> Dispatcher:
     dp = Dispatcher()
 
     async def owner_mw(
@@ -105,6 +139,33 @@ def build_dispatcher(router: QueenRouter, config: QueenConfig) -> Dispatcher:
     async def _panic(message: Message):
         n = await router.cmd_panic()
         await message.answer(f"Panicked {n} workers", parse_mode=None)
+
+    if mailbox_service is not None and mailbox is not None:
+        @dp.message(F.reply_to_message, F.func(owner_only))
+        async def _ceo_reply(message: Message):
+            reply = message.reply_to_message
+            source_text = (reply.text or reply.caption or "") if reply else ""
+            reply_id = _extract_reply_id(source_text)
+            if reply_id is None:
+                # Not a reply to a mailbox delivery -- nothing for us to do.
+                return
+            original = mailbox.get(reply_id)
+            if original is None:
+                await message.answer(
+                    f"Can't find mailbox message {reply_id}", parse_mode=None)
+                return
+            body = message.text or message.caption or ""
+            res = await handle_ceo_reply(
+                mailbox_service,
+                in_reply_to=reply_id,
+                to=original.sender,
+                subject=f"Re: {original.subject}",
+                body=body,
+            )
+            if res.ok:
+                await message.answer("Sent", parse_mode=None)
+            else:
+                await message.answer(f"Failed: {res.error}", parse_mode=None)
 
     return dp
 

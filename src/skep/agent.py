@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 from pathlib import Path
@@ -29,11 +30,15 @@ def create_worktree(repo_path: Path, worktree_path: Path, branch: str) -> None:
 
 class AgentProcess:
     def __init__(self, task_text: str, cwd: Path, claude_bin: str,
-                 config_dir: str | None = None):
+                 config_dir: str | None = None,
+                 mcp_url: str | None = None,
+                 mcp_token: str | None = None):
         self._task_text = task_text
         self._cwd = cwd
         self._claude_bin = claude_bin
         self._config_dir = config_dir
+        self._mcp_url = mcp_url
+        self._mcp_token = mcp_token
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr: bytes = b""
         self._stderr_task: asyncio.Task | None = None
@@ -45,12 +50,21 @@ class AgentProcess:
     def _argv(self) -> list[str]:
         # claude_bin may be a multi-token command (e.g. "python fake_claude.py").
         base = shlex.split(self._claude_bin)
-        return [
+        argv = [
             *base, "-p", self._task_text,
             "--output-format", "stream-json",
             # --input-format stream-json is Phase 2 (soft-steer); Phase 1 is one-shot via -p
             "--verbose",
         ]
+        if self._mcp_url is not None:
+            server: dict[str, object] = {"type": "http", "url": self._mcp_url}
+            if self._mcp_token is not None:
+                server["headers"] = {
+                    "Authorization": f"Bearer {self._mcp_token}"
+                }
+            mcp_config = {"mcpServers": {"mailbox": server}}
+            argv += ["--mcp-config", json.dumps(mcp_config)]
+        return argv
 
     @property
     def returncode(self) -> int | None:

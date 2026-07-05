@@ -4,12 +4,14 @@ import asyncio
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from skep.agent import AgentProcess, create_worktree
 from skep.config import WorkerConfig
 from skep.db import Registry, Task
 from skep.formatting import activity_line, milestone_message
-from skep.transport import EventSink
+from skep.transport import EventSink, MailboxClient
+from skep.worker.mcp_shim import MailboxShim
 
 
 class CapacityError(Exception):
@@ -24,13 +26,18 @@ def _slug(text: str) -> str:
 class Supervisor:
     def __init__(self, config: WorkerConfig, registry: Registry, sink: EventSink,
                  agent_factory: Callable[..., AgentProcess] = AgentProcess,
-                 worktree_factory: Callable[[Path, Path, str], None] = create_worktree):
+                 worktree_factory: Callable[[Path, Path, str], None] = create_worktree,
+                 mailbox_client: MailboxClient | None = None,
+                 shim_factory: Callable[[MailboxClient, int], MailboxShim] = MailboxShim):
         self._cfg = config
         self._reg = registry
         self._sink = sink
         self._agent_factory = agent_factory
         self._worktree_factory = worktree_factory
+        self._mailbox_client = mailbox_client
+        self._shim_factory = shim_factory
         self._agents: dict[int, AgentProcess] = {}
+        self._shims: dict[int, MailboxShim] = {}
         self._tasks: set[asyncio.Task] = set()
 
     def list_active(self) -> list[Task]:
@@ -52,26 +59,61 @@ class Supervisor:
         worktree_path = self._cfg.worktrees_root / f"{repo}-{tid}"
         self._reg.update(tid, worktree_path=str(worktree_path))
 
+        agent: AgentProcess | None = None
+        shim: MailboxShim | None = None
         try:
             self._worktree_factory(repo_path, worktree_path, branch)
             self._reg.log_audit(tid, "spawn", f"{repo}: {task}")
-            agent = self._agent_factory(
+
+            agent_kwargs: dict[str, Any] = dict(
                 task_text=task, cwd=worktree_path,
                 claude_bin=self._cfg.claude_bin,
                 config_dir=self._cfg.claude_config_dir,
             )
+            if self._mailbox_client is not None:
+                shim = self._shim_factory(self._mailbox_client, tid)
+                mcp_url = await shim.start()
+                agent_kwargs["mcp_url"] = mcp_url
+                agent_kwargs["mcp_token"] = None
+
+            agent = self._agent_factory(**agent_kwargs)
             await agent.start()
             self._agents[tid] = agent
+            if shim is not None:
+                self._shims[tid] = shim
             self._reg.update(tid, status="running", pid=agent.pid)
+
+            # Everything below must succeed for run_events' finally to become
+            # the sole owner of agent/shim teardown. Any failure up to and
+            # including create_task() falls through to the except below,
+            # which must undo the dict commits above and terminate whatever
+            # was already started -- otherwise the shim's live server/socket
+            # and the agent subprocess leak forever (see Task 10 review).
+            await self._sink.task_started(tid, repo, task)
+            t = asyncio.create_task(self.run_events(tid, agent))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
         except Exception as exc:
+            self._agents.pop(tid, None)
+            self._shims.pop(tid, None)
             self._reg.update(tid, status="failed")
             self._reg.log_audit(tid, "error", f"spawn failed: {exc}")
+            if agent is not None:
+                try:
+                    await agent.kill()
+                except Exception as kill_exc:
+                    self._reg.log_audit(
+                        tid, "error",
+                        f"agent kill failed on spawn error: {kill_exc}")
+            if shim is not None:
+                try:
+                    await shim.stop()
+                except Exception as stop_exc:
+                    self._reg.log_audit(
+                        tid, "error",
+                        f"mailbox shim stop failed on spawn error: {stop_exc}")
             raise
 
-        await self._sink.task_started(tid, repo, task)
-        t = asyncio.create_task(self.run_events(tid, agent))
-        self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
         return tid
 
     async def run_events(self, task_id: int, agent: AgentProcess) -> None:
@@ -118,6 +160,13 @@ class Supervisor:
                 terminal = "killed"
             self._reg.update(task_id, status=terminal)
             self._agents.pop(task_id, None)
+            shim = self._shims.pop(task_id, None)
+            if shim is not None:
+                try:
+                    await shim.stop()
+                except Exception as exc:
+                    self._reg.log_audit(
+                        task_id, "error", f"mailbox shim stop failed: {exc}")
             _ = activity_started  # activity presence is tracked by the queen
             await self._sink.done(task_id, terminal, summary)
 

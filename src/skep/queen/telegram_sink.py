@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.mailbox import MailboxService
 from skep.telegram_gw import Gateway
 
 
 class QueenSink:
     """Implements QueenInbox: renders worker domain events into Telegram topics."""
 
-    def __init__(self, gateway: Gateway, bookkeeping: Bookkeeping):
+    def __init__(self, gateway: Gateway, bookkeeping: Bookkeeping,
+                 mailbox_service: MailboxService | None = None):
         self._gw = gateway
         self._bk = bookkeeping
+        self._mailbox_service = mailbox_service
 
     async def on_task_started(self, host: str, profile: str, local_id: int,
                               repo: str, title: str) -> None:
@@ -44,6 +47,8 @@ class QueenSink:
         if entry is None:
             return
         self._bk.set_status(entry.ref, status)
+        if self._mailbox_service is not None:
+            await self._mailbox_service.handle_recipient_gone(entry.ref)
 
     async def on_spawn_rejected(self, host: str, profile: str,
                                 reason: str) -> None:

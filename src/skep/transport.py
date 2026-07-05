@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
+
+from skep.queen.mailbox import Message, MailboxService
 
 
 @runtime_checkable
@@ -87,3 +91,84 @@ class SwitchableEventSink:
     async def done(self, local_id: int, status: str, summary: str) -> None:
         if self.target is not None:
             await self.target.done(local_id, status, summary)
+
+
+class MailboxUnavailable(Exception):
+    """Raised when no mailbox transport target is attached."""
+
+
+@dataclass
+class SendReply:
+    ok: bool
+    message_id: int | None
+    error: str | None
+    status: str
+
+
+class MailboxClient(Protocol):
+    """Worker -> queen mailbox handle. Task 11 adds a WS-backed implementation."""
+    async def send(
+        self, tid: int, to: str, subject: str, body: str,
+        in_reply_to: int | None,
+    ) -> SendReply: ...
+
+    async def read(self, tid: int) -> list[dict[str, Any]]: ...
+
+
+def _message_to_dict(m: Message) -> dict[str, Any]:
+    return {
+        "id": m.id,
+        "sender": m.sender,
+        "subject": m.subject,
+        "body": m.body,
+        "created_at": m.created_at,
+        "in_reply_to": m.in_reply_to,
+    }
+
+
+class InMemoryMailboxClient:
+    """Direct in-process MailboxClient over a MailboxService (tests/single-host)."""
+
+    def __init__(
+        self, service: MailboxService, sender_for_tid: Callable[[int], str],
+    ) -> None:
+        self._svc = service
+        self._sender_for_tid = sender_for_tid
+
+    async def send(
+        self, tid: int, to: str, subject: str, body: str,
+        in_reply_to: int | None,
+    ) -> SendReply:
+        sender = self._sender_for_tid(tid)
+        res = await self._svc.handle_send(
+            sender=sender, to=to, subject=subject, body=body,
+            in_reply_to=in_reply_to)
+        return SendReply(res.ok, res.message_id, res.error, res.status)
+
+    async def read(self, tid: int) -> list[dict[str, Any]]:
+        recipient = self._sender_for_tid(tid)
+        msgs = await self._svc.handle_read(recipient)
+        return [_message_to_dict(m) for m in msgs]
+
+
+class SwitchableMailboxClient:
+    """Target-swappable MailboxClient (mirrors SwitchableEventSink)."""
+
+    def __init__(self) -> None:
+        self._target: MailboxClient | None = None
+
+    def set_target(self, target: MailboxClient | None) -> None:
+        self._target = target
+
+    async def send(
+        self, tid: int, to: str, subject: str, body: str,
+        in_reply_to: int | None,
+    ) -> SendReply:
+        if self._target is None:
+            raise MailboxUnavailable("no mailbox transport attached")
+        return await self._target.send(tid, to, subject, body, in_reply_to)
+
+    async def read(self, tid: int) -> list[dict[str, Any]]:
+        if self._target is None:
+            raise MailboxUnavailable("no mailbox transport attached")
+        return await self._target.read(tid)
