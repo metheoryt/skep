@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from skep.worker.mcp_shim import MailboxShim
 from skep.transport import SendReply
 
@@ -57,6 +61,41 @@ def test_build_server_constructs_without_raising():
     shim = MailboxShim(client, tid=1)
     server = shim._build_server()
     assert server is not None
+
+
+async def test_stop_swallows_systemexit_from_serve_task():
+    """uvicorn calls sys.exit() on a bind collision, so the serve() task can
+    finish with SystemExit -- a BaseException, not Exception. When start()
+    detects the early exit and calls stop(), stop() awaits that already-done
+    task; the stored SystemExit must not escape and crash the caller's
+    teardown (e.g. Supervisor). Modeled as a done awaitable holding SystemExit,
+    exactly the surface stop() awaits."""
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[None] = loop.create_future()
+    fut.set_exception(SystemExit(1))
+
+    shim = MailboxShim(_FakeClient(), tid=1)
+    shim._task = fut  # type: ignore[assignment]
+
+    await shim.stop()  # awaiting the done task must NOT re-raise SystemExit
+
+    assert shim._task is None
+    assert shim._server is None
+
+
+async def test_stop_does_not_swallow_cancellation():
+    """stop() catches uvicorn's SystemExit but must NOT eat CancelledError --
+    swallowing cancellation (a bare `except BaseException`) would break
+    cooperative shutdown."""
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[None] = loop.create_future()
+    fut.cancel()
+
+    shim = MailboxShim(_FakeClient(), tid=1)
+    shim._task = fut  # type: ignore[assignment]
+
+    with pytest.raises(asyncio.CancelledError):
+        await shim.stop()
 
 
 async def _post_status(url, headers=None):

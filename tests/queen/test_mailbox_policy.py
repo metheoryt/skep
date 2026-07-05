@@ -221,6 +221,37 @@ async def test_recipient_gone_dead_letters_unread_and_alerts():
     assert len(alerts) == 1
 
 
+async def test_send_dead_letters_if_recipient_goes_terminal_before_delivery():
+    """Recipient-gone guard (defense-in-depth): resolve_address checks the IC
+    recipient is active, but nothing serializes that check against the
+    recipient finishing. If the agent flips to a terminal status between the
+    send-time check and insertion, the message must be dead-lettered
+    immediately -- not orphaned unread in a finished agent's inbox forever.
+
+    Modeled with a bookkeeping whose status is active on resolve_address's
+    check and terminal on the post-insert re-check."""
+    class _FlakyBk:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, ref):
+            self.calls += 1
+            status = "running" if self.calls == 1 else "done"
+            return _Entry(ref=ref, status=status)
+
+        def by_worker_task(self, host, profile, local_id):
+            return None
+
+    bk = _FlakyBk()
+    svc, _, alerts = _svc(bk=bk)
+    res = await svc.handle_send(sender="ceo", to="7", subject="s", body="b")
+    # dead_letter here can only happen if the post-insert re-check ran (a
+    # single resolve at send time saw "running" and would have delivered).
+    assert res.status == "dead_letter"
+    assert svc._mailbox.get(res.message_id).status == STATUS_DEAD
+    assert len(alerts) == 1
+
+
 def test_agent_sender_resolves_ref():
     bk = _Bk(by_wt={("h", "p", 5): _Entry(ref=42)})
     assert agent_sender(bk, "h", "p", 5) == "42"
