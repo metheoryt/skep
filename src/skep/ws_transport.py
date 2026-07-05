@@ -364,7 +364,7 @@ class WsMailboxClient:
             wire.mailbox_send_msg(req_id, tid, to, subject, body, in_reply_to)))
         try:
             msg = await asyncio.wait_for(fut, self._timeout)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
             return SendReply(False, None,
                              "queen did not respond (retryable)", "rejected")
@@ -378,7 +378,7 @@ class WsMailboxClient:
         await self._ws.send_str(wire.encode(wire.inbox_read_msg(req_id, tid)))
         try:
             msg = await asyncio.wait_for(fut, self._timeout)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
             raise MailboxUnavailable(
                 "queen did not respond (retryable)") from None
