@@ -17,7 +17,10 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
 testpaths = ["tests"]
-markers = ["mdns: requires working multicast loopback"]
+markers = [
+    "mdns: requires working multicast loopback",
+    "integration: requires a real `claude` CLI; opt in with SKEP_RUN_INTEGRATION=1",
+]
 
 [build-system]
 requires = ["hatchling"]

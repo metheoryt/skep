@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -12,11 +13,14 @@ from aiogram.types import Message, TelegramObject
 from skep.config import QueenConfig, WorkerConfig, load_queen_config, load_worker_config
 from skep.db import Registry
 from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.mailbox import Mailbox, MailboxService, SendResult
 from skep.queen.router import QueenRouter, UnknownWorker
 from skep.queen.telegram_sink import QueenSink
 from skep.supervisor import CapacityError, Supervisor
 from skep.telegram_gw import Gateway, build_bot, is_owner
 from skep.transport import InMemoryEventSink
+
+_REPLY_ID_RE = re.compile(r"reply id:\s*(\d+)")
 
 
 def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
@@ -39,6 +43,19 @@ def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
     return host, profile, repo, task
 
 
+async def handle_ceo_reply(
+    service: MailboxService,
+    in_reply_to: int | None,
+    to: str,
+    subject: str,
+    body: str,
+) -> SendResult:
+    """Forward an owner-authored Telegram reply into the mailbox as `ceo`."""
+    return await service.handle_send(
+        sender="ceo", to=to, subject=subject, body=body,
+        in_reply_to=in_reply_to)
+
+
 def build_worker_and_router(
     wcfg: WorkerConfig, sink: QueenSink, bk: Bookkeeping, registry: Registry,
 ) -> tuple[QueenRouter, Supervisor]:
@@ -50,7 +67,12 @@ def build_worker_and_router(
     return router, supervisor
 
 
-def build_dispatcher(router: QueenRouter, config: QueenConfig) -> Dispatcher:
+def build_dispatcher(
+    router: QueenRouter,
+    config: QueenConfig,
+    mailbox_service: MailboxService | None = None,
+    mailbox: Mailbox | None = None,
+) -> Dispatcher:
     dp = Dispatcher()
 
     async def owner_mw(
@@ -105,6 +127,34 @@ def build_dispatcher(router: QueenRouter, config: QueenConfig) -> Dispatcher:
     async def _panic(message: Message):
         n = await router.cmd_panic()
         await message.answer(f"Panicked {n} workers", parse_mode=None)
+
+    if mailbox_service is not None and mailbox is not None:
+        @dp.message(F.reply_to_message, F.func(owner_only))
+        async def _ceo_reply(message: Message):
+            reply = message.reply_to_message
+            source_text = (reply.text or reply.caption or "") if reply else ""
+            match = _REPLY_ID_RE.search(source_text)
+            if match is None:
+                # Not a reply to a mailbox delivery -- nothing for us to do.
+                return
+            reply_id = int(match.group(1))
+            original = mailbox.get(reply_id)
+            if original is None:
+                await message.answer(
+                    f"Can't find mailbox message {reply_id}", parse_mode=None)
+                return
+            body = message.text or message.caption or ""
+            res = await handle_ceo_reply(
+                mailbox_service,
+                in_reply_to=reply_id,
+                to=original.sender,
+                subject=f"Re: {original.subject}",
+                body=body,
+            )
+            if res.ok:
+                await message.answer("Sent", parse_mode=None)
+            else:
+                await message.answer(f"Failed: {res.error}", parse_mode=None)
 
     return dp
 

@@ -82,7 +82,7 @@ def build_queen(qcfg: QueenConfig) -> tuple[Bot, Dispatcher, web.Application, Qu
     app = web.Application()
     QueenWsServer(router, sink, qcfg.shared_secret,
                   bookkeeping=bk, mailbox_service=mailbox_service).attach(app)
-    dp = build_dispatcher(router, qcfg)
+    dp = build_dispatcher(router, qcfg, mailbox_service=mailbox_service, mailbox=mailbox)
 
     @dp.my_chat_member()
     async def _on_added(event: ChatMemberUpdated) -> None:
