@@ -181,16 +181,33 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   spawn failure-path leak, MarkdownV2 TelegramBadRequest (bot default parse mode),
   reply-id injection misrouting, and the whole-branch BLOCKER (worker assembly
   never wired the mailbox — feature was inert).
-  **L0.1 FOLLOW-UPS (tracked, not blockers):** (1) at-least-once on CEO delivery
-  failure — deliver_ceo failure → no ack → retry dedupes to duplicate without
-  re-delivering; 'ceo' is push-only → silent loss; needs deliver-failure
-  dead-letter/retry. (2) per-agent shim token (co-located agents can port-scan
-  127.0.0.1 + spoof another agent's tid; from-spoof-proofing is per-arg not
-  per-host). (3) recipient-gone TOCTOU. (4) `build_worker_and_router`
-  single-process path switch has no in-process MailboxService target (raises
-  MailboxUnavailable; real skepd+queen path works). (5) MailboxShim.stop()
-  `except Exception` misses SystemExit from a uvicorn bind-collision.
-  **Next step: L1 memory (reuses the req/reply layer) or the L0.1 follow-ups.**
+  **L0.1 HARDENING DONE 2026-07-05 (branch `feat/skep-l0.1-hardening`, 3
+  commits `8021c0c`/`5499247`/`01e712b`; 214 tests, src pyright-clean; adversarial
+  review ran + fixed):** (1) DONE at-least-once CEO delivery — acceptance
+  decoupled from Telegram push; `Mailbox.pending()` non-destructive peek;
+  `MailboxService.redeliver_ceo()` drains pending CEO mail in order, marks read
+  only after a successful push, under an `asyncio.Lock` (no double-push); periodic
+  `_ceo_retry_loop` (SKEP_MAILBOX_CEO_RETRY_INTERVAL, 30s) tied to the aiohttp app
+  lifecycle. Review caught a CRITICAL regression: a body >4096 chars (within the
+  16384-byte cap) is a permanent Telegram 400 → drain-all-stop-at-first wedged the
+  whole CEO queue forever → fixed with `PermanentDeliveryError` (deliver_ceo maps
+  TelegramBadRequest→permanent; redeliver dead-letters+alerts+skips permanent,
+  only retries transient). `_safe_alert` stops a failed alert crashing the
+  pipeline. (2) DONE per-agent shim bearer token — `secrets.token_urlsafe(32)`
+  per spawn; `_require_bearer` ASGI middleware (constant-time, 401, non-http
+  passthrough); token never logged/persisted. CAVEAT: token rides the agent's
+  argv (`--mcp-config`), so a SAME-UID sibling can read it from /proc/cmdline —
+  relocating off-argv is same-UID-defeatable too (env/file also same-UID-readable)
+  and inline `--mcp-config` `${VAR}` expansion is unconfirmed, so NOT done; it's
+  defense-in-depth vs passive port-scan, fully effective only under UID isolation.
+  **NEW L0.2 FOLLOW-UP: per-agent UID/sandbox isolation** (the real fix for
+  co-located spoofing; deliver the shim token off-argv at the same time).
+  Still-open original L0.1 items: (3) recipient-gone TOCTOU. (4)
+  `build_worker_and_router` single-process path has no in-process MailboxService
+  target (raises MailboxUnavailable; real skepd+queen path works). (5)
+  MailboxShim.stop() `except Exception` misses SystemExit from a uvicorn
+  bind-collision.
+  **Next step: L1 memory (reuses the req/reply layer), or L0.2 / remaining L0.1.**
   Two execution gotchas from Plan 2 (kept for reference): (a) the plan
   predated this repo's pyright governance, so plan-faithful rewrites regressed
   `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
