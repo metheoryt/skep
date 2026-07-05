@@ -264,12 +264,15 @@ class MailboxService:
         if dup is not None:
             return SendResult(True, dup.id, None, "duplicate")
 
-        parent_hops = 0
         if in_reply_to is not None:
             parent = self._mailbox.get(in_reply_to)
-            if parent is not None:
-                parent_hops = parent.hops
-        hops = parent_hops + 1 if in_reply_to is not None else 0
+            if parent is None:
+                return SendResult(
+                    False, None,
+                    f"in_reply_to {in_reply_to} does not exist", "rejected")
+            hops = parent.hops + 1
+        else:
+            hops = 0
 
         if hops > self._depth_cap:
             mid = self._mailbox.insert(

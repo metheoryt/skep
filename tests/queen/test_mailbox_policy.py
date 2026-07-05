@@ -229,3 +229,44 @@ def test_agent_sender_resolves_ref():
 def test_agent_sender_unknown_raises():
     with pytest.raises(ValueError):
         agent_sender(_Bk(), "h", "p", 5)
+
+
+async def test_send_with_unknown_in_reply_to_rejected():
+    svc, _, _ = _svc()
+    res = await svc.handle_send(sender="ceo", to="mgr:alice",
+                                subject="s", body="b", in_reply_to=999999)
+    assert not res.ok and res.status == "rejected"
+    assert "999999" in res.error
+
+
+async def test_body_cap_counts_utf8_bytes():
+    # "é" is 2 UTF-8 bytes; cap is 4 bytes.
+    svc, _, _ = _svc(body_cap=4)
+    over = await svc.handle_send(sender="ceo", to="mgr:alice",
+                                 subject="s", body="ééé")  # 6 bytes > 4
+    assert not over.ok and over.status == "rejected"
+    ok = await svc.handle_send(sender="ceo", to="mgr:alice",
+                               subject="s", body="éé")  # 4 bytes == cap
+    assert ok.ok
+
+
+async def test_recipient_gone_dead_letters_only_unread_with_count():
+    from skep.queen.mailbox import STATUS_DEAD, STATUS_READ
+    bk = _Bk(by_ref={3: _Entry(ref=3, status="running")})
+    svc, _, alerts = _svc(bk=bk)
+    m1 = await svc.handle_send(sender="ceo", to="3", subject="s1", body="b1")
+    m2 = await svc.handle_send(sender="ceo", to="3", subject="s2", body="b2")
+    already = await svc.handle_send(sender="ceo", to="3", subject="s3", body="b3")
+    svc._mailbox.mark_read(already.message_id)
+    await svc.handle_recipient_gone(3)
+    assert svc._mailbox.get(m1.message_id).status == STATUS_DEAD
+    assert svc._mailbox.get(m2.message_id).status == STATUS_DEAD
+    assert svc._mailbox.get(already.message_id).status == STATUS_READ  # not touched
+    assert len(alerts) == 1 and "2" in alerts[0]  # count summary = 2 unread
+
+
+async def test_dedupe_does_not_redeliver_to_ceo():
+    svc, delivered, _ = _svc()
+    await svc.handle_send(sender="mgr:alice", to="ceo", subject="s", body="b")
+    await svc.handle_send(sender="mgr:alice", to="ceo", subject="s", body="b")
+    assert len(delivered) == 1  # duplicate must not re-invoke deliver_ceo
