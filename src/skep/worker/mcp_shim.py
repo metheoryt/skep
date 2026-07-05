@@ -9,6 +9,7 @@ exposed off-host).
 from __future__ import annotations
 
 import asyncio
+import hmac
 import socket
 from typing import Any, Callable
 
@@ -16,6 +17,38 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 from skep.transport import MailboxClient
+
+
+def _require_bearer(app: Any, token: str) -> Any:
+    """Wrap an ASGI app so every HTTP request must carry
+    `Authorization: Bearer <token>`; otherwise it gets 401 before reaching the
+    app. Non-HTTP scopes (lifespan/websocket) pass through untouched so
+    uvicorn's startup/shutdown still work.
+
+    Guards against co-located agents on the same 127.0.0.1 host discovering
+    another agent's ephemeral shim port and spoofing its identity: only the
+    agent handed the token (via --mcp-config) can drive its own shim.
+    """
+    expected = f"Bearer {token}".encode()
+
+    async def guarded(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            provided = headers.get(b"authorization", b"")
+            if not hmac.compare_digest(provided, expected):
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"text/plain")],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": b"unauthorized",
+                })
+                return
+        await app(scope, receive, send)
+
+    return guarded
 
 
 def _pick_free_port(host: str) -> int:
@@ -39,10 +72,12 @@ class MailboxShim:
         client: MailboxClient,
         tid: int,
         host: str = "127.0.0.1",
+        token: str | None = None,
     ) -> None:
         self._client = client
         self._tid = tid
         self._host = host
+        self._token = token
         self._server: FastMCP | None = None
         self._userver: uvicorn.Server | None = None
         self._task: asyncio.Task[None] | None = None
@@ -84,6 +119,8 @@ class MailboxShim:
         self._port = _pick_free_port(self._host)
         self._server = self._build_server()
         app = self._server.streamable_http_app()
+        if self._token is not None:
+            app = _require_bearer(app, self._token)
         config = uvicorn.Config(
             app, host=self._host, port=self._port, log_level="warning")
         self._userver = uvicorn.Server(config)

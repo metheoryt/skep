@@ -77,9 +77,10 @@ class RecordingSink:
 class FakeShim:
     """Stands in for MailboxShim; records start/stop and the tid it was built for."""
 
-    def __init__(self, client, tid):
+    def __init__(self, client, tid, token=None):
         self.client = client
         self.tid = tid
+        self.token = token
         self.started = False
         self.stopped = False
 
@@ -110,8 +111,8 @@ async def test_spawn_starts_shim_and_passes_mcp_url(tmp_path):
         captured.update(kwargs)
         return FakeAgent(**kwargs)
 
-    def shim_factory(client, tid):
-        s = FakeShim(client, tid)
+    def shim_factory(client, tid, token=None):
+        s = FakeShim(client, tid, token=token)
         shims.append(s)
         return s
 
@@ -126,7 +127,10 @@ async def test_spawn_starts_shim_and_passes_mcp_url(tmp_path):
     assert shims[0].started
     assert shims[0].tid == tid
     assert captured["mcp_url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
-    assert captured["mcp_token"] is None
+    # a per-agent bearer token is generated and handed to BOTH the shim (to
+    # enforce) and the agent (to present) -- and they must match.
+    assert isinstance(captured["mcp_token"], str) and captured["mcp_token"]
+    assert captured["mcp_token"] == shims[0].token
     assert sup._shims[tid] is shims[0]
 
     # let the background run_events task drain and stop the shim.
@@ -206,8 +210,8 @@ async def test_kill_leads_to_shim_stop(tmp_path):
     sink = RecordingSink()
     shims = []
 
-    def shim_factory(client, tid):
-        s = FakeShim(client, tid)
+    def shim_factory(client, tid, token=None):
+        s = FakeShim(client, tid, token=token)
         shims.append(s)
         return s
 
@@ -237,8 +241,8 @@ async def test_spawn_agent_start_failure_stops_shim(tmp_path):
     sink = RecordingSink()
     shims = []
 
-    def shim_factory(client, tid):
-        s = FakeShim(client, tid)
+    def shim_factory(client, tid, token=None):
+        s = FakeShim(client, tid, token=token)
         shims.append(s)
         return s
 
@@ -287,8 +291,8 @@ async def test_spawn_sink_failure_stops_shim_and_agent(tmp_path):
         async def done(self, local_id, status, summary):
             pass
 
-    def shim_factory(client, tid):
-        s = FakeShim(client, tid)
+    def shim_factory(client, tid, token=None):
+        s = FakeShim(client, tid, token=token)
         shims.append(s)
         return s
 

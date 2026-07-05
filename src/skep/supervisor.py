@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import secrets
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ class Supervisor:
                  agent_factory: Callable[..., AgentProcess] = AgentProcess,
                  worktree_factory: Callable[[Path, Path, str], None] = create_worktree,
                  mailbox_client: MailboxClient | None = None,
-                 shim_factory: Callable[[MailboxClient, int], MailboxShim] = MailboxShim):
+                 shim_factory: Callable[..., MailboxShim] = MailboxShim):
         self._cfg = config
         self._reg = registry
         self._sink = sink
@@ -71,10 +72,15 @@ class Supervisor:
                 config_dir=self._cfg.claude_config_dir,
             )
             if self._mailbox_client is not None:
-                shim = self._shim_factory(self._mailbox_client, tid)
+                # Per-agent bearer token: the shim enforces it, the agent
+                # presents it via --mcp-config. Stops a co-located agent from
+                # port-scanning 127.0.0.1 and spoofing another agent's tid.
+                token = secrets.token_urlsafe(32)
+                shim = self._shim_factory(
+                    self._mailbox_client, tid, token=token)
                 mcp_url = await shim.start()
                 agent_kwargs["mcp_url"] = mcp_url
-                agent_kwargs["mcp_token"] = None
+                agent_kwargs["mcp_token"] = token
 
             agent = self._agent_factory(**agent_kwargs)
             await agent.start()
