@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from skep.queen.mailbox import Message, MailboxService
 
@@ -112,10 +112,10 @@ class MailboxClient(Protocol):
         in_reply_to: int | None,
     ) -> SendReply: ...
 
-    async def read(self, tid: int) -> list[dict]: ...
+    async def read(self, tid: int) -> list[dict[str, Any]]: ...
 
 
-def _message_to_dict(m: Message) -> dict:
+def _message_to_dict(m: Message) -> dict[str, Any]:
     return {
         "id": m.id,
         "sender": m.sender,
@@ -145,7 +145,7 @@ class InMemoryMailboxClient:
             in_reply_to=in_reply_to)
         return SendReply(res.ok, res.message_id, res.error, res.status)
 
-    async def read(self, tid: int) -> list[dict]:
+    async def read(self, tid: int) -> list[dict[str, Any]]:
         recipient = self._sender_for_tid(tid)
         msgs = await self._svc.handle_read(recipient)
         return [_message_to_dict(m) for m in msgs]
@@ -168,7 +168,7 @@ class SwitchableMailboxClient:
             raise MailboxUnavailable("no mailbox transport attached")
         return await self._target.send(tid, to, subject, body, in_reply_to)
 
-    async def read(self, tid: int) -> list[dict]:
+    async def read(self, tid: int) -> list[dict[str, Any]]:
         if self._target is None:
             raise MailboxUnavailable("no mailbox transport attached")
         return await self._target.read(tid)
