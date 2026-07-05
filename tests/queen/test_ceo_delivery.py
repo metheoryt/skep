@@ -32,3 +32,30 @@ async def test_alert_ceo_posts_warning():
     _, alert = make_ceo_callbacks(gw, topic_id=99)
     await alert("loop stopped")
     assert gw.posts[0][1].endswith("loop stopped") or "loop stopped" in gw.posts[0][1]
+
+
+async def test_deliver_ceo_escapes_markdownv2_reserved_chars():
+    from skep.queen.mailbox import Message, STATUS_UNREAD
+    gw = _Gateway()
+    deliver, _ = make_ceo_callbacks(gw, topic_id=None)
+    msg = Message(id=7, sender="mgr:alice", recipient="ceo",
+                  subject="build passed.", body="all-green (v2)!",
+                  created_at=1.0, in_reply_to=None, hops=0,
+                  status=STATUS_UNREAD, dead_letter_reason=None)
+    await deliver(msg)
+    text = gw.posts[0][1]
+    # dynamic reserved chars must be backslash-escaped for MarkdownV2
+    assert "\\." in text      # the period in "passed."
+    assert "\\(" in text and "\\)" in text   # the parens in "(v2)"
+    assert "\\-" in text      # the hyphen in "all-green"
+    assert "\\!" in text      # the bang
+    # no HTML tags leaked
+    assert "<b>" not in text and "<i>" not in text
+
+
+async def test_alert_ceo_escapes_markdownv2_reserved_chars():
+    gw = _Gateway()
+    _, alert = make_ceo_callbacks(gw, topic_id=None)
+    await alert("2 message(s) undeliverable: agent 3 finished.")
+    text = gw.posts[0][1]
+    assert "\\(" in text and "\\)" in text and "\\." in text

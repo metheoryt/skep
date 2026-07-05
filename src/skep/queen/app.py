@@ -12,6 +12,7 @@ from aiohttp import web
 from skep.app import build_dispatcher
 from skep.config import QueenConfig, load_queen_config
 from skep.discovery import advertise
+from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.mailbox import Mailbox, MailboxService, Message
 from skep.queen.onboarding import onboard_group
@@ -35,15 +36,15 @@ def make_ceo_callbacks(
 
     async def deliver_ceo(msg: Message) -> None:
         text = (
-            f"📬 <b>{msg.sender}</b> → you\n"
-            f"<b>{msg.subject}</b>\n\n"
-            f"{msg.body}\n\n"
-            f"<i>reply id: {msg.id}</i>"
+            f"📬 *{escape_md(msg.sender)}* → you\n"
+            f"*{escape_md(msg.subject)}*\n\n"
+            f"{escape_md(msg.body)}\n\n"
+            f"_reply id: {escape_md(str(msg.id))}_"
         )
         await gateway.post(topic_id, text)
 
     async def alert_ceo(text: str) -> None:
-        await gateway.post(topic_id, text)
+        await gateway.post(topic_id, escape_md(text))
 
     return deliver_ceo, alert_ceo
 
