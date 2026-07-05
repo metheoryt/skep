@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+from typing import Protocol
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import ChatMemberUpdated
 from aiohttp import web
 
@@ -14,12 +18,55 @@ from skep.config import QueenConfig, load_queen_config
 from skep.discovery import advertise
 from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
-from skep.queen.mailbox import Mailbox, MailboxService, Message
+from skep.queen.mailbox import (
+    Mailbox,
+    MailboxService,
+    Message,
+    PermanentDeliveryError,
+)
 from skep.queen.onboarding import onboard_group
 from skep.queen.router import QueenRouter
 from skep.queen.telegram_sink import QueenSink
 from skep.telegram_gw import Gateway, build_bot
 from skep.ws_transport import QueenWsServer
+
+log = logging.getLogger(__name__)
+
+
+class _Redeliverable(Protocol):
+    async def redeliver_ceo(self) -> None: ...
+
+
+async def _ceo_retry_loop(service: _Redeliverable, interval: float) -> None:
+    """Periodically retry pending CEO mail.
+
+    Runs a sweep immediately (draining anything left pending by a prior run),
+    then every `interval` seconds. Never lets one failed sweep kill the loop.
+    """
+    while True:
+        try:
+            await service.redeliver_ceo()
+        except Exception:
+            log.warning("CEO retry sweep failed", exc_info=True)
+        await asyncio.sleep(interval)
+
+
+def _install_ceo_retry(
+    app: web.Application, service: _Redeliverable, interval: float
+) -> None:
+    """Tie a CEO-retry background loop to the web app's lifecycle: it starts
+    on AppRunner.setup() and is cancelled on AppRunner.cleanup()."""
+
+    async def _ctx(app: web.Application) -> AsyncIterator[None]:
+        task = asyncio.create_task(_ceo_retry_loop(service, interval))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app.cleanup_ctx.append(_ctx)
 
 
 def make_ceo_callbacks(
@@ -41,7 +88,14 @@ def make_ceo_callbacks(
             f"{escape_md(msg.body)}\n\n"
             f"_reply id: {escape_md(str(msg.id))}_"
         )
-        await gateway.post(topic_id, text)
+        try:
+            await gateway.post(topic_id, text)
+        except TelegramBadRequest as exc:
+            # 400s never succeed on retry (e.g. body over Telegram's 4096-char
+            # limit -- mailbox_body_cap allows up to 16384 bytes). Mark it
+            # permanent so redeliver_ceo dead-letters it instead of wedging the
+            # CEO queue behind an un-sendable message.
+            raise PermanentDeliveryError(str(exc)) from exc
 
     async def alert_ceo(text: str) -> None:
         await gateway.post(topic_id, escape_md(text))
@@ -82,6 +136,9 @@ def build_queen(qcfg: QueenConfig) -> tuple[Bot, Dispatcher, web.Application, Qu
     app = web.Application()
     QueenWsServer(router, sink, qcfg.shared_secret,
                   bookkeeping=bk, mailbox_service=mailbox_service).attach(app)
+    if qcfg.mailbox_ceo_retry_interval > 0:
+        _install_ceo_retry(app, mailbox_service,
+                           qcfg.mailbox_ceo_retry_interval)
     dp = build_dispatcher(router, qcfg, mailbox_service=mailbox_service, mailbox=mailbox)
 
     @dp.my_chat_member()

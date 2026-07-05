@@ -109,7 +109,7 @@ async def test_build_worker_and_router_supervisor_starts_shim_on_spawn(tmp_path)
         def stderr_text(self):
             return ""
 
-    def shim_factory(client, tid):
+    def shim_factory(client, tid, token=None):
         s = FakeShim(client, tid)
         shims.append(s)
         return s

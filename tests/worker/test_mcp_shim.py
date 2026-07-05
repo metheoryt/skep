@@ -59,6 +59,47 @@ def test_build_server_constructs_without_raising():
     assert server is not None
 
 
+async def _post_status(url, headers=None):
+    """POST to the shim's /mcp endpoint and return the HTTP status. The body
+    is intentionally not a valid MCP frame -- we only care whether the bearer
+    guard let the request through (any non-401) or blocked it (401)."""
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers or {}, json={}) as resp:
+            return resp.status
+
+
+async def test_shim_requires_bearer_token_when_configured():
+    """A co-located agent that port-scans another agent's shim must be turned
+    away: only the holder of the per-agent token may drive the tools."""
+    shim = MailboxShim(_FakeClient(), tid=1, token="s3cret-token")
+    url = await shim.start()
+    try:
+        assert await _post_status(url) == 401  # no Authorization header
+        assert await _post_status(
+            url, {"Authorization": "Bearer wrong"}) == 401
+        assert await _post_status(
+            url, {"Authorization": "s3cret-token"}) == 401  # missing "Bearer "
+        # correct token -> auth passes; request reaches the MCP app (which may
+        # then reject the malformed body, but NOT with 401)
+        assert await _post_status(
+            url, {"Authorization": "Bearer s3cret-token"}) != 401
+    finally:
+        await shim.stop()
+
+
+async def test_shim_without_token_does_not_require_auth():
+    """Back-compat: a shim built with no token accepts unauthenticated calls
+    (the token=None default preserves pre-hardening behavior)."""
+    shim = MailboxShim(_FakeClient(), tid=1)
+    url = await shim.start()
+    try:
+        assert await _post_status(url) != 401
+    finally:
+        await shim.stop()
+
+
 async def test_start_binds_then_stop_releases_port():
     """start() must not return until uvicorn is accepting connections, and
     stop() must fully release the listening socket (not just cancel the

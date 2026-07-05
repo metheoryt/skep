@@ -45,6 +45,8 @@ class QueenConfig:
     mailbox_depth_cap: int = 10
     mailbox_dedupe_window: float = 60.0
     mailbox_body_cap: int = 16384
+    # How often the queen retries pending CEO mail whose push failed (0 = off)
+    mailbox_ceo_retry_interval: float = 30.0
 
 
 def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
@@ -84,4 +86,6 @@ def load_queen_config(env: Mapping[str, str]) -> QueenConfig:
         mailbox_depth_cap=int(env.get("SKEP_MAILBOX_DEPTH_CAP", "10")),
         mailbox_dedupe_window=float(env.get("SKEP_MAILBOX_DEDUPE_WINDOW", "60")),
         mailbox_body_cap=int(env.get("SKEP_MAILBOX_BODY_CAP", "16384")),
+        mailbox_ceo_retry_interval=float(
+            env.get("SKEP_MAILBOX_CEO_RETRY_INTERVAL", "30")),
     )

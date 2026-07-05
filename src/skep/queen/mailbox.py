@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
@@ -9,6 +11,16 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from skep.queen.addressing import resolve_address
+
+log = logging.getLogger(__name__)
+
+
+class PermanentDeliveryError(Exception):
+    """Raised by a deliver_ceo callback when a push can NEVER succeed on retry
+    (e.g. the body exceeds the transport's hard length limit). Signals
+    redeliver_ceo to dead-letter the message and move on instead of retrying
+    it forever and wedging the whole CEO queue behind it."""
+
 
 STATUS_UNREAD = "unread"
 STATUS_READ = "read"
@@ -130,6 +142,14 @@ class Mailbox:
         )
         self._conn.commit()
 
+    def pending(self, recipient: str) -> list[Message]:
+        """Unread messages for a recipient, oldest first, WITHOUT archiving.
+
+        Unlike read_inbox (which marks fetched rows read), this is a
+        non-destructive peek, used by CEO at-least-once redelivery to retry
+        pushes without consuming the messages."""
+        return self._fetch_unread(recipient)
+
     def read_inbox(self, recipient: str) -> list[Message]:
         msgs = self._fetch_unread(recipient)
         self._archive([m.id for m in msgs])
@@ -230,6 +250,9 @@ class MailboxService:
         self._dedupe_window = dedupe_window
         self._body_cap = body_cap
         self._now = now
+        # Serializes redeliver_ceo so an on-send drain and the periodic sweep
+        # never interleave and double-push the same message to the human.
+        self._ceo_lock = asyncio.Lock()
 
     async def handle_send(
         self,
@@ -280,7 +303,7 @@ class MailboxService:
                 body=body, created_at=now, in_reply_to=in_reply_to,
                 hops=hops, status=STATUS_DEAD,
                 dead_letter_reason=f"depth cap exceeded ({hops}>{self._depth_cap})")
-            await self._alert_ceo(
+            await self._safe_alert(
                 f"⚠️ mailbox loop stopped: {sender}→{recipient} "
                 f"'{subject}' exceeded depth cap ({hops})")
             return SendResult(False, mid,
@@ -291,11 +314,49 @@ class MailboxService:
             body=body, created_at=now, in_reply_to=in_reply_to, hops=hops)
 
         if res.kind == "ceo":
-            msg = self._mailbox.get(mid)
-            assert msg is not None
-            await self._deliver_ceo(msg)
+            # Push is decoupled from acceptance: redeliver_ceo drains all
+            # pending CEO mail in order and marks each read only after a
+            # successful push, so a Telegram outage leaves the message
+            # pending for retry instead of losing it (at-least-once).
+            await self.redeliver_ceo()
 
         return SendResult(True, mid, None, "delivered")
+
+    async def redeliver_ceo(self) -> None:
+        """Push all pending (unread) CEO mail in creation order, marking each
+        read only after a successful delivery. Stops at the first failure,
+        leaving that message -- and any later ones -- unread for the next
+        retry, so a transient Telegram outage never silently drops CEO mail
+        (at-least-once). Head-of-line: a message that never delivers blocks
+        later ones -- acceptable because delivery failures here are transient
+        transport errors (content is MarkdownV2-escaped upstream, so
+        content-based rejections do not occur). A push that can never succeed
+        (PermanentDeliveryError, e.g. body over the transport length limit) is
+        dead-lettered and skipped so it cannot wedge the queue behind it."""
+        async with self._ceo_lock:
+            for msg in self._mailbox.pending("ceo"):
+                try:
+                    await self._deliver_ceo(msg)
+                except PermanentDeliveryError as exc:
+                    self._mailbox.dead_letter_for(
+                        msg.id, f"undeliverable: {exc}")
+                    await self._safe_alert(
+                        f"⚠️ CEO message {msg.id} undeliverable: {exc}")
+                    continue
+                except Exception:
+                    log.warning(
+                        "CEO delivery failed for message %s; leaving pending "
+                        "for retry", msg.id, exc_info=True)
+                    return
+                self._mailbox.mark_read(msg.id)
+
+    async def _safe_alert(self, text: str) -> None:
+        """Best-effort CEO alert: a failed alert push must never crash the
+        caller (send pipeline / task-done handler)."""
+        try:
+            await self._alert_ceo(text)
+        except Exception:
+            log.warning("CEO alert failed: %s", text, exc_info=True)
 
     async def handle_read(self, recipient: str) -> list[Message]:
         return self._mailbox.read_inbox(recipient)
@@ -306,6 +367,6 @@ class MailboxService:
         for m in pending:
             self._mailbox.dead_letter_for(m.id, f"recipient {ref} finished")
         if pending:
-            await self._alert_ceo(
+            await self._safe_alert(
                 f"⚠️ {len(pending)} message(s) undeliverable: "
                 f"agent {ref} finished before reading its inbox")
