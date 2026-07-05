@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import ChatMemberUpdated
@@ -11,6 +13,7 @@ from skep.app import build_dispatcher
 from skep.config import QueenConfig, load_queen_config
 from skep.discovery import advertise
 from skep.queen.bookkeeping import Bookkeeping
+from skep.queen.mailbox import Mailbox, MailboxService, Message
 from skep.queen.onboarding import onboard_group
 from skep.queen.router import QueenRouter
 from skep.queen.telegram_sink import QueenSink
@@ -18,14 +21,66 @@ from skep.telegram_gw import Gateway, build_bot
 from skep.ws_transport import QueenWsServer
 
 
+def make_ceo_callbacks(
+    gateway: Gateway,
+    topic_id: int | None,
+) -> tuple[
+    Callable[[Message], Awaitable[None]],
+    Callable[[str], Awaitable[None]],
+]:
+    """Build the queen's Telegram-facing MailboxService callbacks.
+
+    Kept out of mailbox.py so MailboxService itself stays Telegram-free.
+    """
+
+    async def deliver_ceo(msg: Message) -> None:
+        text = (
+            f"📬 <b>{msg.sender}</b> → you\n"
+            f"<b>{msg.subject}</b>\n\n"
+            f"{msg.body}\n\n"
+            f"<i>reply id: {msg.id}</i>"
+        )
+        await gateway.post(topic_id, text)
+
+    async def alert_ceo(text: str) -> None:
+        await gateway.post(topic_id, text)
+
+    return deliver_ceo, alert_ceo
+
+
+def _mailbox_db_path(bookkeeping_db: str) -> str:
+    """Sibling DB next to the bookkeeping store (own connection/schema)."""
+    if bookkeeping_db == ":memory:":
+        return ":memory:"
+    return str(Path(bookkeeping_db).with_name("mailbox.sqlite"))
+
+
 def build_queen(qcfg: QueenConfig) -> tuple[Bot, Dispatcher, web.Application, QueenRouter]:
     bot = build_bot(qcfg)
     gateway = Gateway(bot, qcfg)
     bk = Bookkeeping.open(qcfg.bookkeeping_db)
-    sink = QueenSink(gateway, bk)
+    mailbox = Mailbox.open(_mailbox_db_path(qcfg.bookkeeping_db))
+    # No dedicated mailbox topic exists yet; post CEO mail/alerts to the
+    # group's General topic (message_thread_id=None), same destination
+    # used for other queen-level notices.
+    deliver_ceo, alert_ceo = make_ceo_callbacks(gateway, None)
+    mailbox_service = MailboxService(
+        mailbox,
+        bk,
+        set(qcfg.managers),
+        deliver_ceo,
+        alert_ceo,
+        rate_limit=qcfg.mailbox_rate_limit,
+        rate_window=qcfg.mailbox_rate_window,
+        depth_cap=qcfg.mailbox_depth_cap,
+        dedupe_window=qcfg.mailbox_dedupe_window,
+        body_cap=qcfg.mailbox_body_cap,
+    )
+    sink = QueenSink(gateway, bk, mailbox_service=mailbox_service)
     router = QueenRouter(bk)
     app = web.Application()
-    QueenWsServer(router, sink, qcfg.shared_secret).attach(app)
+    QueenWsServer(router, sink, qcfg.shared_secret,
+                  bookkeeping=bk, mailbox_service=mailbox_service).attach(app)
     dp = build_dispatcher(router, qcfg)
 
     @dp.my_chat_member()
