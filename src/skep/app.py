@@ -23,6 +23,17 @@ from skep.transport import InMemoryEventSink
 _REPLY_ID_RE = re.compile(r"reply id:\s*(\d+)")
 
 
+def _extract_reply_id(text: str) -> int | None:
+    """Extract the mailbox id from a CEO-delivery's 'reply id: <n>' footer.
+
+    Uses the LAST match: deliver_ceo always appends this footer AFTER the
+    lower-trust, sender-controlled subject/body, so an injected earlier
+    'reply id: N' in message content can never win (prevents reply misrouting).
+    """
+    matches = _REPLY_ID_RE.findall(text)
+    return int(matches[-1]) if matches else None
+
+
 def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
     """Parse `<host> [--profile <p>] <repo> <task...>` -> (host, profile, repo, task)."""
     tokens = (args or "").split()
@@ -133,11 +144,10 @@ def build_dispatcher(
         async def _ceo_reply(message: Message):
             reply = message.reply_to_message
             source_text = (reply.text or reply.caption or "") if reply else ""
-            match = _REPLY_ID_RE.search(source_text)
-            if match is None:
+            reply_id = _extract_reply_id(source_text)
+            if reply_id is None:
                 # Not a reply to a mailbox delivery -- nothing for us to do.
                 return
-            reply_id = int(match.group(1))
             original = mailbox.get(reply_id)
             if original is None:
                 await message.answer(
