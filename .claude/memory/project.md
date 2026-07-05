@@ -163,7 +163,34 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   this exact layer**. Link-down → shim returns retryable error (never hangs). fake_claude
   CAN'T call MCP → real tool round-trip is integration/manual; unit-test shim handlers +
   seam req/reply directly. Defaults: 20/min, depth 10, dedupe 60s, body 16KB, pure-pull
-  inbox. **Next step: build L0 Mailbox (spec `2026-07-05-l0-mailbox-design.md`, TDD).**
+  inbox.
+  **L0 MAILBOX BUILT + MERGED to main 2026-07-05 (merge `92f0c3a`, branch
+  `feat/skep-l0-mailbox`, 26 commits).** Plan `docs/superpowers/plans/2026-07-05-l0-mailbox.md`
+  (13 TDD tasks, subagent-driven w/ per-task + whole-branch review). Shipped:
+  `queen/mailbox.py` (Mailbox store + MailboxService policy pipeline),
+  `queen/addressing.py` (ceo/mgr:<name>/<ref>, fail-closed to active IC only),
+  `worker/mcp_shim.py` (per-agent FastMCP streamable-HTTP, owns uvicorn lifecycle),
+  `WsMailboxClient` req/reply layer in `ws_transport.py`, config knobs, CEO
+  outbound (MarkdownV2-escaped) + inbound reply. Reconciled from the spike:
+  **one FastMCP app PER AGENT on an ephemeral port with `tid` closed over**
+  (not one-server-per-worker+token — token unused, `mcp_token=None`); identity
+  still spoof-proof (closure + server-side `agent_sender`). 202 tests pass (+1
+  opt-in real-claude integration `SKEP_RUN_INTEGRATION=1`), pyright-clean.
+  Reviews caught+fixed real bugs: read_inbox archive race, depth-cap bypass via
+  unresolvable in_reply_to, shim socket-leak on stop + failed-start, supervisor
+  spawn failure-path leak, MarkdownV2 TelegramBadRequest (bot default parse mode),
+  reply-id injection misrouting, and the whole-branch BLOCKER (worker assembly
+  never wired the mailbox — feature was inert).
+  **L0.1 FOLLOW-UPS (tracked, not blockers):** (1) at-least-once on CEO delivery
+  failure — deliver_ceo failure → no ack → retry dedupes to duplicate without
+  re-delivering; 'ceo' is push-only → silent loss; needs deliver-failure
+  dead-letter/retry. (2) per-agent shim token (co-located agents can port-scan
+  127.0.0.1 + spoof another agent's tid; from-spoof-proofing is per-arg not
+  per-host). (3) recipient-gone TOCTOU. (4) `build_worker_and_router`
+  single-process path switch has no in-process MailboxService target (raises
+  MailboxUnavailable; real skepd+queen path works). (5) MailboxShim.stop()
+  `except Exception` misses SystemExit from a uvicorn bind-collision.
+  **Next step: L1 memory (reuses the req/reply layer) or the L0.1 follow-ups.**
   Two execution gotchas from Plan 2 (kept for reference): (a) the plan
   predated this repo's pyright governance, so plan-faithful rewrites regressed
   `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
