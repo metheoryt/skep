@@ -25,9 +25,13 @@ def _require_bearer(app: Any, token: str) -> Any:
     app. Non-HTTP scopes (lifespan/websocket) pass through untouched so
     uvicorn's startup/shutdown still work.
 
-    Guards against co-located agents on the same 127.0.0.1 host discovering
-    another agent's ephemeral shim port and spoofing its identity: only the
-    agent handed the token (via --mcp-config) can drive its own shim.
+    Raises the bar against a process that discovers another agent's ephemeral
+    shim port: merely connecting no longer suffices -- the caller must present
+    the per-agent token. NOTE: the token is currently handed to the agent on
+    its command line (--mcp-config), so a SAME-UID sibling that reads
+    /proc/<pid>/cmdline can still recover it; true per-agent isolation needs
+    separate UIDs / a sandbox (tracked as an L0.2 follow-up). This guard is
+    defense-in-depth that becomes fully effective under that isolation.
     """
     expected = f"Bearer {token}".encode()
 

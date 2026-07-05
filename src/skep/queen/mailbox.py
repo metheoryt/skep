@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 import time
@@ -12,6 +13,14 @@ from typing import Protocol
 from skep.queen.addressing import resolve_address
 
 log = logging.getLogger(__name__)
+
+
+class PermanentDeliveryError(Exception):
+    """Raised by a deliver_ceo callback when a push can NEVER succeed on retry
+    (e.g. the body exceeds the transport's hard length limit). Signals
+    redeliver_ceo to dead-letter the message and move on instead of retrying
+    it forever and wedging the whole CEO queue behind it."""
+
 
 STATUS_UNREAD = "unread"
 STATUS_READ = "read"
@@ -241,6 +250,9 @@ class MailboxService:
         self._dedupe_window = dedupe_window
         self._body_cap = body_cap
         self._now = now
+        # Serializes redeliver_ceo so an on-send drain and the periodic sweep
+        # never interleave and double-push the same message to the human.
+        self._ceo_lock = asyncio.Lock()
 
     async def handle_send(
         self,
@@ -318,16 +330,25 @@ class MailboxService:
         (at-least-once). Head-of-line: a message that never delivers blocks
         later ones -- acceptable because delivery failures here are transient
         transport errors (content is MarkdownV2-escaped upstream, so
-        content-based rejections do not occur)."""
-        for msg in self._mailbox.pending("ceo"):
-            try:
-                await self._deliver_ceo(msg)
-            except Exception:
-                log.warning(
-                    "CEO delivery failed for message %s; leaving pending "
-                    "for retry", msg.id, exc_info=True)
-                return
-            self._mailbox.mark_read(msg.id)
+        content-based rejections do not occur). A push that can never succeed
+        (PermanentDeliveryError, e.g. body over the transport length limit) is
+        dead-lettered and skipped so it cannot wedge the queue behind it."""
+        async with self._ceo_lock:
+            for msg in self._mailbox.pending("ceo"):
+                try:
+                    await self._deliver_ceo(msg)
+                except PermanentDeliveryError as exc:
+                    self._mailbox.dead_letter_for(
+                        msg.id, f"undeliverable: {exc}")
+                    await self._safe_alert(
+                        f"⚠️ CEO message {msg.id} undeliverable: {exc}")
+                    continue
+                except Exception:
+                    log.warning(
+                        "CEO delivery failed for message %s; leaving pending "
+                        "for retry", msg.id, exc_info=True)
+                    return
+                self._mailbox.mark_read(msg.id)
 
     async def _safe_alert(self, text: str) -> None:
         """Best-effort CEO alert: a failed alert push must never crash the

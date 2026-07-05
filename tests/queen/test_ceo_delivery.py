@@ -53,6 +53,29 @@ async def test_deliver_ceo_escapes_markdownv2_reserved_chars():
     assert "<b>" not in text and "<i>" not in text
 
 
+async def test_deliver_ceo_maps_telegram_badrequest_to_permanent():
+    """A Telegram 400 (e.g. body over the 4096-char limit) must surface as
+    PermanentDeliveryError so redeliver_ceo dead-letters it instead of
+    retrying forever."""
+    import pytest
+    from aiogram.exceptions import TelegramBadRequest
+
+    from skep.queen.mailbox import (
+        Message, STATUS_UNREAD, PermanentDeliveryError,
+    )
+
+    class _BadGateway:
+        async def post(self, topic_id, text):
+            raise TelegramBadRequest(method=None, message="message is too long")
+
+    deliver, _ = make_ceo_callbacks(_BadGateway(), topic_id=None)
+    msg = Message(id=1, sender="mgr:a", recipient="ceo", subject="s",
+                  body="x" * 5000, created_at=1.0, in_reply_to=None, hops=0,
+                  status=STATUS_UNREAD, dead_letter_reason=None)
+    with pytest.raises(PermanentDeliveryError):
+        await deliver(msg)
+
+
 async def test_alert_ceo_escapes_markdownv2_reserved_chars():
     gw = _Gateway()
     _, alert = make_ceo_callbacks(gw, topic_id=None)

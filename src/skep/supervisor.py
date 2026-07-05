@@ -73,8 +73,10 @@ class Supervisor:
             )
             if self._mailbox_client is not None:
                 # Per-agent bearer token: the shim enforces it, the agent
-                # presents it via --mcp-config. Stops a co-located agent from
-                # port-scanning 127.0.0.1 and spoofing another agent's tid.
+                # presents it via --mcp-config. Defeats a passive
+                # port-scan-and-connect from another local process; a same-UID
+                # sibling that reads this agent's argv can still recover it
+                # (true isolation needs per-agent UIDs -- L0.2 follow-up).
                 token = secrets.token_urlsafe(32)
                 shim = self._shim_factory(
                     self._mailbox_client, tid, token=token)

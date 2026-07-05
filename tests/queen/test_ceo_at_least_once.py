@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from skep.queen.mailbox import (
     Mailbox,
     MailboxService,
+    PermanentDeliveryError,
+    STATUS_DEAD,
     STATUS_READ,
     STATUS_UNREAD,
 )
@@ -135,6 +137,33 @@ async def test_dedupe_does_not_drop_an_undelivered_ceo_message():
     fail["on"] = False
     await svc.redeliver_ceo()
     assert svc._mailbox.get(first.message_id).status == STATUS_READ
+
+
+async def test_permanent_failure_dead_letters_and_does_not_wedge_queue():
+    """A permanently-undeliverable message (e.g. body over Telegram's length
+    limit) must be dead-lettered and skipped -- NOT retried forever, which
+    would wedge every later CEO message behind it (the regression the review
+    caught)."""
+    delivered = []
+
+    async def deliver(msg):
+        if msg.subject == "poison":
+            raise PermanentDeliveryError("message is too long")
+        delivered.append(msg.id)
+
+    svc, alerts = _svc(deliver)
+    poison = await svc.handle_send(sender="mgr:alice", to="ceo",
+                                   subject="poison", body="x")
+    good = await svc.handle_send(sender="mgr:alice", to="ceo",
+                                 subject="ok", body="y")
+
+    # poison was dead-lettered (not left pending), good got through
+    assert svc._mailbox.get(poison.message_id).status == STATUS_DEAD
+    assert svc._mailbox.get(good.message_id).status == STATUS_READ
+    assert delivered == [good.message_id]
+    assert svc._mailbox.pending("ceo") == []
+    # the human was alerted about the undeliverable message
+    assert any(str(poison.message_id) in a for a in alerts)
 
 
 async def test_redeliver_stops_at_first_failure_and_preserves_order():

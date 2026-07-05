@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import ChatMemberUpdated
 from aiohttp import web
 
@@ -17,7 +18,12 @@ from skep.config import QueenConfig, load_queen_config
 from skep.discovery import advertise
 from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
-from skep.queen.mailbox import Mailbox, MailboxService, Message
+from skep.queen.mailbox import (
+    Mailbox,
+    MailboxService,
+    Message,
+    PermanentDeliveryError,
+)
 from skep.queen.onboarding import onboard_group
 from skep.queen.router import QueenRouter
 from skep.queen.telegram_sink import QueenSink
@@ -82,7 +88,14 @@ def make_ceo_callbacks(
             f"{escape_md(msg.body)}\n\n"
             f"_reply id: {escape_md(str(msg.id))}_"
         )
-        await gateway.post(topic_id, text)
+        try:
+            await gateway.post(topic_id, text)
+        except TelegramBadRequest as exc:
+            # 400s never succeed on retry (e.g. body over Telegram's 4096-char
+            # limit -- mailbox_body_cap allows up to 16384 bytes). Mark it
+            # permanent so redeliver_ceo dead-letters it instead of wedging the
+            # CEO queue behind an un-sendable message.
+            raise PermanentDeliveryError(str(exc)) from exc
 
     async def alert_ceo(text: str) -> None:
         await gateway.post(topic_id, escape_md(text))
