@@ -92,12 +92,16 @@ class MailboxShim:
         # connections (bounded), so callers never race a not-yet-listening
         # server (~5s max).
         for _ in range(500):
+            if self._task.done():
+                exc = self._task.exception()  # serve() exited before ready
+                await self.stop()
+                raise RuntimeError(
+                    "mailbox shim server exited during startup") from exc
             if self._userver.started:
-                break
+                return self._base_url()
             await asyncio.sleep(0.01)
-        else:
-            raise RuntimeError("mailbox shim server failed to start")
-        return self._base_url()
+        await self.stop()  # timeout: don't leak a slow-but-live server
+        raise RuntimeError("mailbox shim server failed to start")
 
     def _base_url(self) -> str:
         assert self._server is not None
@@ -111,7 +115,10 @@ class MailboxShim:
             # the ASGI lifespan mid-shutdown and leaks the fd/port).
             self._userver.should_exit = True
         if self._task is not None:
-            await self._task
-            self._task = None
+            try:
+                await self._task
+            except Exception:
+                pass
         self._userver = None
+        self._task = None
         self._server = None

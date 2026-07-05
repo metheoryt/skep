@@ -81,3 +81,33 @@ async def test_start_binds_then_stop_releases_port():
         s.bind(("127.0.0.1", port))
     finally:
         s.close()
+
+
+async def test_failed_start_cleans_up_and_does_not_leak(monkeypatch):
+    """A start() that fails must tear itself down (no leaked task/server).
+
+    We force the failure via uvicorn.Server.serve() itself raising, rather
+    than pre-occupying the port: uvicorn's real bind-failure path calls
+    sys.exit() inside the server task, and asyncio re-raises SystemExit out
+    of the event loop instead of surfacing it as a normal task exception --
+    that would crash the whole test process, not just this test. Patching
+    serve() exercises the exact same code path in start() (early task
+    completion with an exception, detected via self._task.done()) without
+    that hazard.
+    """
+    import uvicorn
+    import pytest
+
+    async def _boom_serve(self, sockets=None):
+        raise RuntimeError("simulated bind failure")
+
+    monkeypatch.setattr(uvicorn.Server, "serve", _boom_serve)
+
+    shim = MailboxShim(_FakeClient(), tid=1)
+    with pytest.raises(RuntimeError, match="exited during startup"):
+        await shim.start()
+
+    # shim tore down its own partial state -- no leaked task or server.
+    assert shim._task is None
+    assert shim._userver is None
+    assert shim._server is None
