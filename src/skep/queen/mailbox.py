@@ -129,3 +129,36 @@ class Mailbox:
         msgs = self._fetch_unread(recipient)
         self._archive([m.id for m in msgs])
         return msgs
+
+    def count_recent(self, sender: str, since: float) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM messages "
+            "WHERE sender = ? AND created_at >= ? AND status != ?",
+            (sender, since, STATUS_DEAD),
+        ).fetchone()
+        return int(row["n"])
+
+    def find_duplicate(
+        self,
+        sender: str,
+        recipient: str,
+        subject: str,
+        body: str,
+        since: float,
+    ) -> Message | None:
+        row = self._conn.execute(
+            "SELECT * FROM messages "
+            "WHERE sender = ? AND recipient = ? AND subject = ? AND body = ? "
+            "  AND created_at >= ? AND status != ? "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (sender, recipient, subject, body, since, STATUS_DEAD),
+        ).fetchone()
+        return _row_to_message(row) if row else None
+
+    def dead_letter_for(self, message_id: int, reason: str) -> None:
+        self._conn.execute(
+            "UPDATE messages SET status = ?, dead_letter_reason = ? "
+            "WHERE id = ?",
+            (STATUS_DEAD, reason, message_id),
+        )
+        self._conn.commit()
