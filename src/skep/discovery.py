@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from typing import override
 
 from zeroconf import ServiceInfo, ServiceListener, Zeroconf
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
@@ -53,6 +54,7 @@ async def browse(timeout: float = 3.0) -> str | None:
             found.put_nowait(f"ws://{addrs[0]}:{info.port}/ws")
 
     class _Listener(ServiceListener):
+        @override
         def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
             # Called synchronously from zeroconf's event loop dispatch;
             # schedule the async resolve rather than blocking it inline.
@@ -60,9 +62,11 @@ async def browse(timeout: float = 3.0) -> str | None:
             pending.add(task)
             task.add_done_callback(pending.discard)
 
+        @override
         def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
             pass
 
+        @override
         def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
             pass
 
