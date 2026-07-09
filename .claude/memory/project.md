@@ -403,6 +403,47 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   agents driving it = blast-radius expansion → gate behind P3/L4 gated-ops +
   owner-lock. Own future thread (its own brainstorm); does NOT affect the L0 spec.
 
+- **L1 DESIGNED 2026-07-09 — "agent memory is gortex memory; skep stores nothing."**
+  Spec `docs/superpowers/specs/2026-07-09-l1-memory-substrate-design.md` (revision 2,
+  commit `9771365`). Revision 1 (commit `4fab2d7`, superseded in-file) specified a
+  queen-hosted SQLite/FTS5 store + 4 WS frames + per-scope ACL matrix + a `repo_key`
+  protocol change across 6 modules — over-built; owner pushed back ("does it look too
+  complicated?"). `gortex memory store|recall|surface` already provides per-repo
+  (workspace) and per-machine (global) scopes, supersedes, importance, tags,
+  provenance, ranked recall — and already runs on every worker box. skep's whole
+  contribution is **one `--append-system-prompt` addendum at spawn** naming the repo
+  path + when to write, plus a **startup preflight** that OMITS the addendum when the
+  daemon is down / `gortex` off PATH / repo untracked (never hand an agent a command
+  that fails). Per-task scratch = a file in the worktree (no mechanism). CEO↔agent =
+  the L0 mailbox (not a memory scope). `SKEP_MEMORY_ENABLED` (default true) forces off.
+  **Memory is an ENHANCEMENT, not critical path** — an agent without it still does its
+  task, so the gortex dependency is soft and must never fail a spawn.
+  VERIFIED 2026-07-09 (gortex v0.56.0), incl. two claims that proved FALSE:
+  (a) Anthropic has NO first-party embeddings endpoint (docs → Voyage AI) — this
+  killed the sqlite-vec plan; (b) **gortex memory does NOT work from an agent's
+  worktree** (agents run at `worktrees_root/<repo>-<tid>`; daemon tracks only the
+  parent repo → `store` errors "daemon does not track …"). Fix: `--index <repo_path>`
+  — verified store+recall from a live worktree, lands in the parent's workspace.
+  (c) The **MCP** path (profile gortex survives because spawn omits
+  `--strict-mcp-config`) is **UNVERIFIED** — same cwd-coverage gate, unknown whether
+  `store_memory` takes a repo override. The spec deliberately depends on the **CLI**
+  (workers are native → `gortex` on PATH → agent reaches it via Bash). Verify
+  separately before ever relying on MCP.
+  **DOCUMENTED ASSUMPTION (load-bearing):** gortex has **no per-profile scope** (one
+  daemon per user per machine). Profile isolation holds ONLY because personal
+  (`~/.claude`) and work (`~/.claude-work`) live on separate WSL distros with separate
+  daemons + tracked-repo sets. Co-locating both profiles on one host silently leaks a
+  work repo's operational notes to a personal agent — revisit BEFORE that happens.
+  **DEFERRED, not discarded:** the 2026-07-05 queen-hosted central store remains the
+  end state (L2's persistent managers need queen-persisted durable identity); its
+  complexity buys cross-machine sharing, which this fleet doesn't need yet. Trigger to
+  build: agents on different hosts, or co-located profiles, needing shared memory —
+  NOT "the store feels small". Sleep cycle + vectors likewise deferred with triggers.
+  **NEXT STEP: write the implementation plan** (superpowers:writing-plans) from the
+  spec, then TDD it. Test surface is small: `_argv` includes/omits the addendum per
+  preflight; spawn succeeds in every unavailable case; addendum's recommended
+  invocation === the string preflight smoke-checks (guards drift).
+
 ## Gotchas
 
 - **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
