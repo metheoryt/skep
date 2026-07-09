@@ -447,3 +447,13 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   work-repo + work-profile-exhausted ⇒ PARK (no personal fallback). The L4
   "route around the exhausted division" idea only applies if a task is ever
   profile-agnostic or a class ever has >1 account — not the case today.
+- **Type view = ty + ruff (adopted 2026-07-09, per the reworked `gortex-align`
+  skill).** `[tool.ty]` + `[tool.ruff]` in `pyproject.toml`; standalone
+  `pyrightconfig.json` removed. `uvx ty check src` is the resolution gate (clean);
+  `uvx ruff check` (with `ANN`) is the annotation-presence gate. ty is pre-1.0
+  (v0.0.x) — its config keys/rule names can churn; re-verify against
+  `uvx ty check --help` if a key errors. **FOLLOW-UP:** `uvx ruff check src` still
+  has 21 findings — 18 missing return-type annotations (ANN204 on `__init__`/dunder,
+  ANN202 on private fns) across ~10 files + 3 E501 long lines. Deferred, not
+  gortex-blocking (ty is already clean); annotate to feed the native provider's
+  annotation-presence half when convenient.
