@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from skep.config import WorkerConfig
+from skep.memory import MemoryPreflight
 from skep.worker import app as worker_app
 from skep.worker.app import build_worker, serve
 from skep.transport import SwitchableEventSink, SwitchableMailboxClient
@@ -137,3 +138,8 @@ async def test_serve_refuses_whitespace_only_shared_secret(monkeypatch):
 
     with pytest.raises(SystemExit, match="SKEP_SHARED_SECRET"):
         await serve(wcfg)
+
+
+def test_build_worker_gives_supervisor_a_real_memory_preflight():
+    supervisor, _switch, _client = build_worker(_wcfg())
+    assert isinstance(supervisor._memory, MemoryPreflight)  # type: ignore[attr-defined]

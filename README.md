@@ -18,9 +18,30 @@ Telegram. See `docs/superpowers/specs/` for the design.
    export SKEP_REPOS_ROOT=$HOME/gh  # where your repos live
    export SKEP_WORKTREES_ROOT=$HOME/.skep/worktrees
    # optional: SKEP_CLAUDE_BIN=claude
+   # optional: SKEP_MEMORY_ENABLED=false   # turn off the agent-memory addendum
    ```
 
 5. `uv run skep`
+
+## Agent memory
+
+Agents get durable, per-repo memory through the machine's
+[gortex](https://github.com/gortexhq/gortex) daemon — skep stores nothing. At
+spawn, each agent's system prompt gains a short addendum telling it to
+`gortex memory recall --index <repo>` before starting and to store operational
+facts it learns.
+
+This requires a running gortex daemon on the worker host that **tracks each repo
+agents work in**. The worker smoke-checks the exact recall command once per repo;
+if gortex is missing, the daemon is down or wedged, or the repo is untracked, the
+addendum is omitted, a warning is logged, and agents run normally without memory.
+Set `SKEP_MEMORY_ENABLED=false` to omit it unconditionally.
+
+Memory is scoped to the repo's gortex workspace and is shared by every agent that
+works on that repo. Profiles are isolated only because personal and work profiles
+live on separate hosts with separate daemons — co-locating them would share a
+repo's memory across profiles. See
+`docs/superpowers/specs/2026-07-09-l1-memory-substrate-design.md` §4.1.
 
 ## Develop
 
