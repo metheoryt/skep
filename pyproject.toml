@@ -28,3 +28,25 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skep"]
+
+[tool.ty.environment]
+python-version = "3.13"
+python = "./.venv"
+root = ["./src"]
+
+[tool.ty.src]
+include = ["src", "tests"]
+exclude = ["**/__pycache__", "build", "dist"]
+respect-ignore-files = true
+
+[tool.ty.terminal]
+error-on-warning = false
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+
+[tool.ruff.format]
