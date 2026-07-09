@@ -11,7 +11,8 @@ from __future__ import annotations
 import asyncio
 import hmac
 import socket
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
@@ -40,15 +41,19 @@ def _require_bearer(app: Any, token: str) -> Any:
             headers = dict(scope.get("headers") or [])
             provided = headers.get(b"authorization", b"")
             if not hmac.compare_digest(provided, expected):
-                await send({
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"text/plain")],
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": b"unauthorized",
-                })
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"unauthorized",
+                    }
+                )
                 return
         await app(scope, receive, send)
 
@@ -95,8 +100,7 @@ class MailboxShim:
             in_reply_to: int | None = None,
         ) -> dict[str, Any]:
             """Send a message to another agent (ceo / mgr:<name> / <ref>)."""
-            reply = await self._client.send(
-                self._tid, to, subject, body, in_reply_to)
+            reply = await self._client.send(self._tid, to, subject, body, in_reply_to)
             return {
                 "ok": reply.ok,
                 "message_id": reply.message_id,
@@ -126,7 +130,8 @@ class MailboxShim:
         if self._token is not None:
             app = _require_bearer(app, self._token)
         config = uvicorn.Config(
-            app, host=self._host, port=self._port, log_level="warning")
+            app, host=self._host, port=self._port, log_level="warning"
+        )
         self._userver = uvicorn.Server(config)
         self._task = asyncio.create_task(self._userver.serve())
         # Wait until uvicorn has actually bound the socket and is accepting
@@ -136,8 +141,7 @@ class MailboxShim:
             if self._task.done():
                 exc = self._task.exception()  # serve() exited before ready
                 await self.stop()
-                raise RuntimeError(
-                    "mailbox shim server exited during startup") from exc
+                raise RuntimeError("mailbox shim server exited during startup") from exc
             if self._userver.started:
                 return self._base_url()
             await asyncio.sleep(0.01)

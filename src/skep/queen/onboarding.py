@@ -4,7 +4,10 @@ from aiogram import Bot
 from aiogram.types import BotCommand, BotCommandScopeChat
 
 _COMMANDS = [
-    BotCommand(command="spawn", description="Spawn an agent: <host> [--profile p] <repo> <task>"),
+    BotCommand(
+        command="spawn",
+        description="Spawn an agent: <host> [--profile p] <repo> <task>",
+    ),
     BotCommand(command="ls", description="List active agents"),
     BotCommand(command="kill", description="Kill an agent by ref"),
     BotCommand(command="panic", description="Kill all agents"),

@@ -4,12 +4,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from skep.queen.mailbox import Message, MailboxService
+from skep.queen.mailbox import MailboxService, Message
 
 
 @runtime_checkable
 class EventSink(Protocol):
     """Worker -> queen. The worker's Supervisor calls these; identity is implicit."""
+
     async def task_started(self, local_id: int, repo: str, title: str) -> None: ...
     async def activity(self, local_id: int, line: str) -> None: ...
     async def milestone(self, local_id: int, text: str) -> None: ...
@@ -24,6 +25,7 @@ class CommandHandler(Protocol):
     tests; the queen router ignores them. Typed truthfully so the concrete
     Supervisor conforms to the protocol.
     """
+
     async def spawn(self, repo: str, task: str) -> int: ...
     async def kill(self, task_id: int) -> bool: ...
     async def panic(self) -> int: ...
@@ -32,16 +34,20 @@ class CommandHandler(Protocol):
 @runtime_checkable
 class QueenInbox(Protocol):
     """The queen's receiving side. Each call carries the sender (host, profile)."""
-    async def on_task_started(self, host: str, profile: str, local_id: int,
-                              repo: str, title: str) -> None: ...
-    async def on_activity(self, host: str, profile: str, local_id: int,
-                          line: str) -> None: ...
-    async def on_milestone(self, host: str, profile: str, local_id: int,
-                           text: str) -> None: ...
-    async def on_done(self, host: str, profile: str, local_id: int,
-                      status: str, summary: str) -> None: ...
-    async def on_spawn_rejected(self, host: str, profile: str,
-                                reason: str) -> None: ...
+
+    async def on_task_started(
+        self, host: str, profile: str, local_id: int, repo: str, title: str
+    ) -> None: ...
+    async def on_activity(
+        self, host: str, profile: str, local_id: int, line: str
+    ) -> None: ...
+    async def on_milestone(
+        self, host: str, profile: str, local_id: int, text: str
+    ) -> None: ...
+    async def on_done(
+        self, host: str, profile: str, local_id: int, status: str, summary: str
+    ) -> None: ...
+    async def on_spawn_rejected(self, host: str, profile: str, reason: str) -> None: ...
 
 
 class InMemoryEventSink:
@@ -56,7 +62,9 @@ class InMemoryEventSink:
         self._profile = profile
 
     async def task_started(self, local_id: int, repo: str, title: str) -> None:
-        await self._inbox.on_task_started(self._host, self._profile, local_id, repo, title)
+        await self._inbox.on_task_started(
+            self._host, self._profile, local_id, repo, title
+        )
 
     async def activity(self, local_id: int, line: str) -> None:
         await self._inbox.on_activity(self._host, self._profile, local_id, line)
@@ -107,8 +115,13 @@ class SendReply:
 
 class MailboxClient(Protocol):
     """Worker -> queen mailbox handle. Task 11 adds a WS-backed implementation."""
+
     async def send(
-        self, tid: int, to: str, subject: str, body: str,
+        self,
+        tid: int,
+        to: str,
+        subject: str,
+        body: str,
         in_reply_to: int | None,
     ) -> SendReply: ...
 
@@ -130,19 +143,25 @@ class InMemoryMailboxClient:
     """Direct in-process MailboxClient over a MailboxService (tests/single-host)."""
 
     def __init__(
-        self, service: MailboxService, sender_for_tid: Callable[[int], str],
+        self,
+        service: MailboxService,
+        sender_for_tid: Callable[[int], str],
     ) -> None:
         self._svc = service
         self._sender_for_tid = sender_for_tid
 
     async def send(
-        self, tid: int, to: str, subject: str, body: str,
+        self,
+        tid: int,
+        to: str,
+        subject: str,
+        body: str,
         in_reply_to: int | None,
     ) -> SendReply:
         sender = self._sender_for_tid(tid)
         res = await self._svc.handle_send(
-            sender=sender, to=to, subject=subject, body=body,
-            in_reply_to=in_reply_to)
+            sender=sender, to=to, subject=subject, body=body, in_reply_to=in_reply_to
+        )
         return SendReply(res.ok, res.message_id, res.error, res.status)
 
     async def read(self, tid: int) -> list[dict[str, Any]]:
@@ -161,7 +180,11 @@ class SwitchableMailboxClient:
         self._target = target
 
     async def send(
-        self, tid: int, to: str, subject: str, body: str,
+        self,
+        tid: int,
+        to: str,
+        subject: str,
+        body: str,
         in_reply_to: int | None,
     ) -> SendReply:
         if self._target is None:

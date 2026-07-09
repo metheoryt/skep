@@ -83,7 +83,7 @@ class Mailbox:
         self._conn.commit()
 
     @classmethod
-    def open(cls, path: str) -> "Mailbox":
+    def open(cls, path: str) -> Mailbox:
         return cls(sqlite3.connect(path))
 
     def insert(
@@ -103,8 +103,17 @@ class Mailbox:
             "(sender, recipient, subject, body, created_at, in_reply_to, "
             " hops, status, dead_letter_reason) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (sender, recipient, subject, body, created_at, in_reply_to,
-             hops, status, dead_letter_reason),
+            (
+                sender,
+                recipient,
+                subject,
+                body,
+                created_at,
+                in_reply_to,
+                hops,
+                status,
+                dead_letter_reason,
+            ),
         )
         self._conn.commit()
         assert cur.lastrowid is not None
@@ -182,8 +191,7 @@ class Mailbox:
 
     def dead_letter_for(self, message_id: int, reason: str) -> None:
         self._conn.execute(
-            "UPDATE messages SET status = ?, dead_letter_reason = ? "
-            "WHERE id = ?",
+            "UPDATE messages SET status = ?, dead_letter_reason = ? WHERE id = ?",
             (STATUS_DEAD, reason, message_id),
         )
         self._conn.commit()
@@ -217,9 +225,7 @@ def agent_sender(
 ) -> str:
     entry = bookkeeping.by_worker_task(host, profile, local_id)
     if entry is None:
-        raise ValueError(
-            f"no bookkeeping entry for {host}/{profile}/{local_id}"
-        )
+        raise ValueError(f"no bookkeeping entry for {host}/{profile}/{local_id}")
     return str(entry.ref)
 
 
@@ -265,9 +271,9 @@ class MailboxService:
         now = self._now()
 
         if len(body.encode("utf-8")) > self._body_cap:
-            return SendResult(False, None,
-                              f"body too large (>{self._body_cap} bytes)",
-                              "rejected")
+            return SendResult(
+                False, None, f"body too large (>{self._body_cap} bytes)", "rejected"
+            )
 
         res = resolve_address(to, self._bk, self._managers)
         if res.kind == "invalid":
@@ -277,13 +283,15 @@ class MailboxService:
         recent = self._mailbox.count_recent(sender, since=now - self._rate_window)
         if recent >= self._rate_limit:
             return SendResult(
-                False, None,
+                False,
+                None,
                 f"rate limit exceeded ({self._rate_limit}/{self._rate_window:g}s)",
-                "rejected")
+                "rejected",
+            )
 
         dup = self._mailbox.find_duplicate(
-            sender, recipient, subject, body,
-            since=now - self._dedupe_window)
+            sender, recipient, subject, body, since=now - self._dedupe_window
+        )
         if dup is not None:
             return SendResult(True, dup.id, None, "duplicate")
 
@@ -291,27 +299,39 @@ class MailboxService:
             parent = self._mailbox.get(in_reply_to)
             if parent is None:
                 return SendResult(
-                    False, None,
-                    f"in_reply_to {in_reply_to} does not exist", "rejected")
+                    False, None, f"in_reply_to {in_reply_to} does not exist", "rejected"
+                )
             hops = parent.hops + 1
         else:
             hops = 0
 
         if hops > self._depth_cap:
             mid = self._mailbox.insert(
-                sender=sender, recipient=recipient, subject=subject,
-                body=body, created_at=now, in_reply_to=in_reply_to,
-                hops=hops, status=STATUS_DEAD,
-                dead_letter_reason=f"depth cap exceeded ({hops}>{self._depth_cap})")
+                sender=sender,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                created_at=now,
+                in_reply_to=in_reply_to,
+                hops=hops,
+                status=STATUS_DEAD,
+                dead_letter_reason=f"depth cap exceeded ({hops}>{self._depth_cap})",
+            )
             await self._safe_alert(
                 f"⚠️ mailbox loop stopped: {sender}→{recipient} "
-                f"'{subject}' exceeded depth cap ({hops})")
-            return SendResult(False, mid,
-                              "depth cap exceeded", "dead_letter")
+                f"'{subject}' exceeded depth cap ({hops})"
+            )
+            return SendResult(False, mid, "depth cap exceeded", "dead_letter")
 
         mid = self._mailbox.insert(
-            sender=sender, recipient=recipient, subject=subject,
-            body=body, created_at=now, in_reply_to=in_reply_to, hops=hops)
+            sender=sender,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            created_at=now,
+            in_reply_to=in_reply_to,
+            hops=hops,
+        )
 
         if res.kind == "ic":
             # Recipient-gone guard (defense-in-depth). resolve_address above
@@ -325,12 +345,13 @@ class MailboxService:
             # finished agent's inbox forever.
             if resolve_address(to, self._bk, self._managers).kind != "ic":
                 self._mailbox.dead_letter_for(
-                    mid, f"recipient {recipient} finished before delivery")
+                    mid, f"recipient {recipient} finished before delivery"
+                )
                 await self._safe_alert(
                     f"⚠️ message to agent {recipient} undeliverable: "
-                    f"recipient finished before delivery")
-                return SendResult(False, mid, "recipient finished",
-                                  "dead_letter")
+                    f"recipient finished before delivery"
+                )
+                return SendResult(False, mid, "recipient finished", "dead_letter")
 
         if res.kind == "ceo":
             # Push is decoupled from acceptance: redeliver_ceo drains all
@@ -357,15 +378,17 @@ class MailboxService:
                 try:
                     await self._deliver_ceo(msg)
                 except PermanentDeliveryError as exc:
-                    self._mailbox.dead_letter_for(
-                        msg.id, f"undeliverable: {exc}")
+                    self._mailbox.dead_letter_for(msg.id, f"undeliverable: {exc}")
                     await self._safe_alert(
-                        f"⚠️ CEO message {msg.id} undeliverable: {exc}")
+                        f"⚠️ CEO message {msg.id} undeliverable: {exc}"
+                    )
                     continue
                 except Exception:
                     log.warning(
-                        "CEO delivery failed for message %s; leaving pending "
-                        "for retry", msg.id, exc_info=True)
+                        "CEO delivery failed for message %s; leaving pending for retry",
+                        msg.id,
+                        exc_info=True,
+                    )
                     return
                 self._mailbox.mark_read(msg.id)
 
@@ -388,4 +411,5 @@ class MailboxService:
         if pending:
             await self._safe_alert(
                 f"⚠️ {len(pending)} message(s) undeliverable: "
-                f"agent {ref} finished before reading its inbox")
+                f"agent {ref} finished before reading its inbox"
+            )

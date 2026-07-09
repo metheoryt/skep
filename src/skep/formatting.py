@@ -7,7 +7,7 @@ _MAX_ACTIVITY = 200
 
 
 def escape_md(text: str) -> str:
-    out = []
+    out: list[str] = []
     for ch in text:
         if ch in _MD_RESERVED:
             out.append("\\" + ch)

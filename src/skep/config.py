@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 
 def _as_bool(value: str | None, default: bool) -> bool:
@@ -87,5 +87,6 @@ def load_queen_config(env: Mapping[str, str]) -> QueenConfig:
         mailbox_dedupe_window=float(env.get("SKEP_MAILBOX_DEDUPE_WINDOW", "60")),
         mailbox_body_cap=int(env.get("SKEP_MAILBOX_BODY_CAP", "16384")),
         mailbox_ceo_retry_interval=float(
-            env.get("SKEP_MAILBOX_CEO_RETRY_INTERVAL", "30")),
+            env.get("SKEP_MAILBOX_CEO_RETRY_INTERVAL", "30")
+        ),
     )

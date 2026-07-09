@@ -13,13 +13,16 @@ from skep.transport import SwitchableEventSink, SwitchableMailboxClient
 from skep.ws_transport import WorkerWsClient
 
 
-def build_worker(wcfg: WorkerConfig) -> tuple[Supervisor, SwitchableEventSink, WorkerWsClient]:
+def build_worker(
+    wcfg: WorkerConfig,
+) -> tuple[Supervisor, SwitchableEventSink, WorkerWsClient]:
     registry = Registry.open(wcfg.db_path)
     switch = SwitchableEventSink()
     mailbox_switch = SwitchableMailboxClient()
     supervisor = Supervisor(wcfg, registry, switch, mailbox_client=mailbox_switch)
-    client = WorkerWsClient(wcfg, supervisor, switch, wcfg.shared_secret,
-                             mailbox_switch=mailbox_switch)
+    client = WorkerWsClient(
+        wcfg, supervisor, switch, wcfg.shared_secret, mailbox_switch=mailbox_switch
+    )
     return supervisor, switch, client
 
 
@@ -27,11 +30,13 @@ async def serve(wcfg: WorkerConfig) -> None:
     if not wcfg.shared_secret.strip():
         raise SystemExit(
             "SKEP_SHARED_SECRET is required (worker<->queen auth); "
-            "refusing to start without it")
+            "refusing to start without it"
+        )
     url = await resolve_queen_url(wcfg)
     if url is None:
         raise SystemExit(
-            "no queen: set SKEP_QUEEN_URL or enable mDNS (SKEP_USE_MDNS=1)")
+            "no queen: set SKEP_QUEEN_URL or enable mDNS (SKEP_USE_MDNS=1)"
+        )
     # freeze the resolved URL onto the config the client reads
     wcfg = dataclasses.replace(wcfg, queen_url=url)
     _sup, _switch, client = build_worker(wcfg)

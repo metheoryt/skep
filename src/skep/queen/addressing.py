@@ -37,23 +37,29 @@ def resolve_address(
         return Resolution(kind="ceo", ref=None, canonical="ceo", error=None)
 
     if to.startswith("mgr:"):
-        name = to[len("mgr:"):]
+        name = to[len("mgr:") :]
         if name in managers:
-            return Resolution(kind="mgr", ref=None, canonical=f"mgr:{name}",
-                              error=None)
-        return Resolution(kind="invalid", ref=None, canonical=to,
-                          error=f"unknown manager '{name}'")
+            return Resolution(kind="mgr", ref=None, canonical=f"mgr:{name}", error=None)
+        return Resolution(
+            kind="invalid", ref=None, canonical=to, error=f"unknown manager '{name}'"
+        )
 
     if to.isdigit():
         ref = int(to)
         entry = bookkeeping.get(ref)
         if entry is None:
-            return Resolution(kind="invalid", ref=None, canonical=to,
-                              error=f"no such agent ref {ref}")
+            return Resolution(
+                kind="invalid", ref=None, canonical=to, error=f"no such agent ref {ref}"
+            )
         if entry.status not in _ADDRESSABLE_STATUSES:
-            return Resolution(kind="invalid", ref=None, canonical=to,
-                              error=f"agent {ref} is not active ({entry.status})")
+            return Resolution(
+                kind="invalid",
+                ref=None,
+                canonical=to,
+                error=f"agent {ref} is not active ({entry.status})",
+            )
         return Resolution(kind="ic", ref=ref, canonical=str(ref), error=None)
 
-    return Resolution(kind="invalid", ref=None, canonical=to,
-                      error=f"unrecognized address '{to}'")
+    return Resolution(
+        kind="invalid", ref=None, canonical=to, error=f"unrecognized address '{to}'"
+    )

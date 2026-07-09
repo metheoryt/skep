@@ -18,8 +18,17 @@ CREATE TABLE IF NOT EXISTS entries (
 """
 
 _ACTIVE = ("spawning", "running")
-_COLUMNS = ("ref", "host", "profile", "local_id", "repo", "title",
-            "topic_id", "activity_msg_id", "status")
+_COLUMNS = (
+    "ref",
+    "host",
+    "profile",
+    "local_id",
+    "repo",
+    "title",
+    "topic_id",
+    "activity_msg_id",
+    "status",
+)
 
 
 @dataclass
@@ -41,7 +50,7 @@ class Bookkeeping:
         self._conn.row_factory = sqlite3.Row
 
     @classmethod
-    def open(cls, path: str) -> "Bookkeeping":
+    def open(cls, path: str) -> Bookkeeping:
         conn = sqlite3.connect(path)
         conn.executescript(_SCHEMA)
         conn.commit()
@@ -50,8 +59,15 @@ class Bookkeeping:
     def _row(self, row: sqlite3.Row) -> Entry:
         return Entry(**{c: row[c] for c in _COLUMNS})
 
-    def add(self, host: str, profile: str, local_id: int, repo: str,
-            title: str, topic_id: int) -> int:
+    def add(
+        self,
+        host: str,
+        profile: str,
+        local_id: int,
+        repo: str,
+        title: str,
+        topic_id: int,
+    ) -> int:
         cur = self._conn.execute(
             "INSERT INTO entries (host, profile, local_id, repo, title, topic_id,"
             " status) VALUES (?, ?, ?, ?, ?, ?, 'running')",
@@ -70,9 +86,7 @@ class Bookkeeping:
         return self._row(row) if row else None
 
     def get(self, ref: int) -> Entry | None:
-        row = self._conn.execute(
-            "SELECT * FROM entries WHERE ref=?", (ref,)
-        ).fetchone()
+        row = self._conn.execute("SELECT * FROM entries WHERE ref=?", (ref,)).fetchone()
         return self._row(row) if row else None
 
     def set_activity_msg(self, ref: int, msg_id: int) -> None:
@@ -82,9 +96,7 @@ class Bookkeeping:
         self._conn.commit()
 
     def set_status(self, ref: int, status: str) -> None:
-        self._conn.execute(
-            "UPDATE entries SET status=? WHERE ref=?", (status, ref)
-        )
+        self._conn.execute("UPDATE entries SET status=? WHERE ref=?", (status, ref))
         self._conn.commit()
 
     def list_active(self) -> list[Entry]:

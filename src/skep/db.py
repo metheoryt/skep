@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -28,8 +28,16 @@ CREATE TABLE IF NOT EXISTS audit (
 
 _ACTIVE = ("spawning", "running")
 _TASK_COLUMNS = (
-    "id", "repo", "task", "worktree_path", "session_id",
-    "pid", "topic_id", "mode", "status", "created_at",
+    "id",
+    "repo",
+    "task",
+    "worktree_path",
+    "session_id",
+    "pid",
+    "topic_id",
+    "mode",
+    "status",
+    "created_at",
 )
 
 
@@ -48,7 +56,7 @@ class Task:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class Registry:
@@ -57,14 +65,15 @@ class Registry:
         self._conn.row_factory = sqlite3.Row
 
     @classmethod
-    def open(cls, path: str) -> "Registry":
+    def open(cls, path: str) -> Registry:
         conn = sqlite3.connect(path)
         conn.executescript(_SCHEMA)
         conn.commit()
         return cls(conn)
 
-    def add_task(self, repo: str, task: str, worktree_path: str,
-                 mode: str = "native") -> int:
+    def add_task(
+        self, repo: str, task: str, worktree_path: str, mode: str = "native"
+    ) -> int:
         cur = self._conn.execute(
             "INSERT INTO tasks (repo, task, worktree_path, mode, status, created_at)"
             " VALUES (?, ?, ?, ?, 'spawning', ?)",
