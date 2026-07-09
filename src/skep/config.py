@@ -25,6 +25,7 @@ class WorkerConfig:
     shared_secret: str = ""
     use_mdns: bool = True
     claude_bin: str = "claude"
+    memory_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
         shared_secret=env.get("SKEP_SHARED_SECRET", ""),
         use_mdns=_as_bool(env.get("SKEP_USE_MDNS"), True),
         claude_bin=env.get("SKEP_CLAUDE_BIN", "claude"),
+        memory_enabled=_as_bool(env.get("SKEP_MEMORY_ENABLED"), True),
     )
 
 

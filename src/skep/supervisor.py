@@ -11,6 +11,7 @@ from skep.agent import AgentProcess, create_worktree
 from skep.config import WorkerConfig
 from skep.db import Registry, Task
 from skep.formatting import activity_line, milestone_message
+from skep.memory import MemoryProbe
 from skep.transport import EventSink, MailboxClient
 from skep.worker.mcp_shim import MailboxShim
 
@@ -34,6 +35,7 @@ class Supervisor:
         worktree_factory: Callable[[Path, Path, str], None] = create_worktree,
         mailbox_client: MailboxClient | None = None,
         shim_factory: Callable[..., MailboxShim] = MailboxShim,
+        memory: MemoryProbe | None = None,
     ) -> None:
         self._cfg = config
         self._reg = registry
@@ -42,6 +44,7 @@ class Supervisor:
         self._worktree_factory = worktree_factory
         self._mailbox_client = mailbox_client
         self._shim_factory = shim_factory
+        self._memory = memory
         self._agents: dict[int, AgentProcess] = {}
         self._shims: dict[int, MailboxShim] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -75,6 +78,17 @@ class Supervisor:
                 claude_bin=self._cfg.claude_bin,
                 config_dir=self._cfg.claude_config_dir,
             )
+            if self._cfg.memory_enabled and self._memory is not None:
+                # Soft dependency: a broken probe must never fail a spawn.
+                # `repo_path` (the parent repo) is what gortex tracks -- the
+                # agent's worktree is not indexed.
+                try:
+                    addendum = await self._memory.addendum_for(repo_path)
+                except Exception as exc:
+                    self._reg.log_audit(tid, "error", f"memory probe failed: {exc}")
+                    addendum = None
+                if addendum is not None:
+                    agent_kwargs["append_system_prompt"] = addendum
             if self._mailbox_client is not None:
                 # Per-agent bearer token: the shim enforces it, the agent
                 # presents it via --mcp-config. Defeats a passive

@@ -45,6 +45,7 @@ class AgentProcess:
         config_dir: str | None = None,
         mcp_url: str | None = None,
         mcp_token: str | None = None,
+        append_system_prompt: str | None = None,
     ) -> None:
         self._task_text = task_text
         self._cwd = cwd
@@ -52,6 +53,7 @@ class AgentProcess:
         self._config_dir = config_dir
         self._mcp_url = mcp_url
         self._mcp_token = mcp_token
+        self._append_system_prompt = append_system_prompt
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr: bytes = b""
         self._stderr_task: asyncio.Task | None = None
@@ -72,6 +74,8 @@ class AgentProcess:
             # --input-format stream-json is Phase 2 (soft-steer); Phase 1 is one-shot via -p
             "--verbose",
         ]
+        if self._append_system_prompt is not None:
+            argv += ["--append-system-prompt", self._append_system_prompt]
         if self._mcp_url is not None:
             server: dict[str, object] = {"type": "http", "url": self._mcp_url}
             if self._mcp_token is not None:
