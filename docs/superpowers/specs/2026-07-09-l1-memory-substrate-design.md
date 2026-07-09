@@ -1,7 +1,12 @@
 # L1 — Agent Memory (design)
 
 **Date:** 2026-07-09
-**Status:** Approved design, pre-implementation
+**Status:** Implemented and merged, then **SUPERSEDED the same day** by
+`2026-07-09-l1.1-agent-memory-files-design.md`. Its §1 decision ("agent memory is gortex
+memory; skep stores nothing") no longer holds: memory is now tracked files under
+`<repo>/.agent-memory/`, because a daemon-owned store cannot be inspected, diffed, or
+reviewed. Most of this spec's plumbing survives — read L1.1 §7 for what was kept. The
+rest of this document is retained for the reasoning and the verified facts in §2.
 **Revision 2.** Revision 1 of this file specified a queen-hosted SQLite store with
 four new WebSocket frames, a per-scope ACL matrix, and a repo-identity protocol
 change across six modules. It was over-built for what the fleet needs today. That
