@@ -25,11 +25,16 @@ def _slug(text: str) -> str:
 
 
 class Supervisor:
-    def __init__(self, config: WorkerConfig, registry: Registry, sink: EventSink,
-                 agent_factory: Callable[..., AgentProcess] = AgentProcess,
-                 worktree_factory: Callable[[Path, Path, str], None] = create_worktree,
-                 mailbox_client: MailboxClient | None = None,
-                 shim_factory: Callable[..., MailboxShim] = MailboxShim):
+    def __init__(
+        self,
+        config: WorkerConfig,
+        registry: Registry,
+        sink: EventSink,
+        agent_factory: Callable[..., AgentProcess] = AgentProcess,
+        worktree_factory: Callable[[Path, Path, str], None] = create_worktree,
+        mailbox_client: MailboxClient | None = None,
+        shim_factory: Callable[..., MailboxShim] = MailboxShim,
+    ):
         self._cfg = config
         self._reg = registry
         self._sink = sink
@@ -51,9 +56,7 @@ class Supervisor:
 
     async def spawn(self, repo: str, task: str) -> int:
         if len(self._agents) >= self._cfg.max_concurrent:
-            raise CapacityError(
-                f"at capacity ({self._cfg.max_concurrent} running)"
-            )
+            raise CapacityError(f"at capacity ({self._cfg.max_concurrent} running)")
         repo_path = self._cfg.repos_root / repo
         tid = self._reg.add_task(repo, task, "", mode="native")
         branch = f"skep/{_slug(task)}-{tid}"
@@ -67,7 +70,8 @@ class Supervisor:
             self._reg.log_audit(tid, "spawn", f"{repo}: {task}")
 
             agent_kwargs: dict[str, Any] = dict(
-                task_text=task, cwd=worktree_path,
+                task_text=task,
+                cwd=worktree_path,
                 claude_bin=self._cfg.claude_bin,
                 config_dir=self._cfg.claude_config_dir,
             )
@@ -78,8 +82,7 @@ class Supervisor:
                 # sibling that reads this agent's argv can still recover it
                 # (true isolation needs per-agent UIDs -- L0.2 follow-up).
                 token = secrets.token_urlsafe(32)
-                shim = self._shim_factory(
-                    self._mailbox_client, tid, token=token)
+                shim = self._shim_factory(self._mailbox_client, tid, token=token)
                 mcp_url = await shim.start()
                 agent_kwargs["mcp_url"] = mcp_url
                 agent_kwargs["mcp_token"] = token
@@ -111,15 +114,17 @@ class Supervisor:
                     await agent.kill()
                 except Exception as kill_exc:
                     self._reg.log_audit(
-                        tid, "error",
-                        f"agent kill failed on spawn error: {kill_exc}")
+                        tid, "error", f"agent kill failed on spawn error: {kill_exc}"
+                    )
             if shim is not None:
                 try:
                     await shim.stop()
                 except Exception as stop_exc:
                     self._reg.log_audit(
-                        tid, "error",
-                        f"mailbox shim stop failed on spawn error: {stop_exc}")
+                        tid,
+                        "error",
+                        f"mailbox shim stop failed on spawn error: {stop_exc}",
+                    )
             raise
 
         return tid
@@ -138,8 +143,7 @@ class Supervisor:
                     summary = ev.text
                     self._reg.update(
                         task_id,
-                        session_id=ev.session_id
-                        or self._task(task_id).session_id,
+                        session_id=ev.session_id or self._task(task_id).session_id,
                     )
                     terminal = "failed" if ev.is_error else "done"
 
@@ -156,7 +160,8 @@ class Supervisor:
                 terminal = "failed"
                 summary = f"agent exited without result (rc={agent.returncode})"
                 self._reg.log_audit(
-                    task_id, "error",
+                    task_id,
+                    "error",
                     f"{summary}: {agent.stderr_text[-500:]}",
                 )
         except Exception as exc:
@@ -174,7 +179,8 @@ class Supervisor:
                     await shim.stop()
                 except Exception as exc:
                     self._reg.log_audit(
-                        task_id, "error", f"mailbox shim stop failed: {exc}")
+                        task_id, "error", f"mailbox shim stop failed: {exc}"
+                    )
             _ = activity_started  # activity presence is tracked by the queen
             await self._sink.done(task_id, terminal, summary)
 

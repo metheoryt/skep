@@ -28,16 +28,26 @@ def decode(raw: str) -> dict[str, Any]:
     return obj
 
 
-def register_msg(host: str, profile: str, version: str,
-                 active_tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"t": REGISTER, "host": host, "profile": profile,
-            "version": version, "active_tasks": active_tasks}
+def register_msg(
+    host: str, profile: str, version: str, active_tasks: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "t": REGISTER,
+        "host": host,
+        "profile": profile,
+        "version": version,
+        "active_tasks": active_tasks,
+    }
 
 
-def heartbeat_msg(active_tasks: list[dict[str, Any]],
-                  capacity_remaining: int) -> dict[str, Any]:
-    return {"t": HEARTBEAT, "active_tasks": active_tasks,
-            "capacity_remaining": capacity_remaining}
+def heartbeat_msg(
+    active_tasks: list[dict[str, Any]], capacity_remaining: int
+) -> dict[str, Any]:
+    return {
+        "t": HEARTBEAT,
+        "active_tasks": active_tasks,
+        "capacity_remaining": capacity_remaining,
+    }
 
 
 def task_started_msg(local_id: int, repo: str, title: str) -> dict[str, Any]:

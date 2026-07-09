@@ -73,12 +73,15 @@ async def handle_ceo_reply(
 ) -> SendResult:
     """Forward an owner-authored Telegram reply into the mailbox as `ceo`."""
     return await service.handle_send(
-        sender="ceo", to=to, subject=subject, body=body,
-        in_reply_to=in_reply_to)
+        sender="ceo", to=to, subject=subject, body=body, in_reply_to=in_reply_to
+    )
 
 
 def build_worker_and_router(
-    wcfg: WorkerConfig, sink: QueenSink, bk: Bookkeeping, registry: Registry,
+    wcfg: WorkerConfig,
+    sink: QueenSink,
+    bk: Bookkeeping,
+    registry: Registry,
     mailbox_service: MailboxService | None = None,
 ) -> tuple[QueenRouter, Supervisor]:
     """Wire one queen router + one worker over the in-memory transport (Plan 1).
@@ -91,10 +94,13 @@ def build_worker_and_router(
     worker_sink = InMemoryEventSink(sink, wcfg.host, wcfg.profile)
     mailbox_switch = SwitchableMailboxClient()
     if mailbox_service is not None:
+
         def _sender_for_tid(tid: int) -> str:
             return agent_sender(bk, wcfg.host, wcfg.profile, tid)
+
         mailbox_switch.set_target(
-            InMemoryMailboxClient(mailbox_service, _sender_for_tid))
+            InMemoryMailboxClient(mailbox_service, _sender_for_tid)
+        )
     supervisor = Supervisor(wcfg, registry, worker_sink, mailbox_client=mailbox_switch)
     router = QueenRouter(bk)
     router.register(wcfg.host, wcfg.profile, supervisor)
@@ -118,7 +124,11 @@ def build_dispatcher(
             sub = getattr(event, attr, None)
             user = getattr(sub, "from_user", None) if sub else None
             if user is not None:
-                return await handler(event, data) if is_owner(user.id, config.owner_id) else None
+                return (
+                    await handler(event, data)
+                    if is_owner(user.id, config.owner_id)
+                    else None
+                )
         return None
 
     dp.update.outer_middleware(owner_mw)
@@ -131,8 +141,9 @@ def build_dispatcher(
     async def _spawn(message: Message, command: CommandObject):
         parsed = parse_spawn(command.args or "")
         if parsed is None:
-            await message.answer("Usage: /spawn <host> [--profile <p>] <repo> <task>",
-                                 parse_mode=None)
+            await message.answer(
+                "Usage: /spawn <host> [--profile <p>] <repo> <task>", parse_mode=None
+            )
             return
         host, profile, repo, task = parsed
         try:
@@ -163,6 +174,7 @@ def build_dispatcher(
         await message.answer(f"Panicked {n} workers", parse_mode=None)
 
     if mailbox_service is not None and mailbox is not None:
+
         @dp.message(F.reply_to_message, F.func(owner_only))
         async def _ceo_reply(message: Message):
             reply = message.reply_to_message
@@ -174,7 +186,8 @@ def build_dispatcher(
             original = mailbox.get(reply_id)
             if original is None:
                 await message.answer(
-                    f"Can't find mailbox message {reply_id}", parse_mode=None)
+                    f"Can't find mailbox message {reply_id}", parse_mode=None
+                )
                 return
             body = message.text or message.caption or ""
             res = await handle_ceo_reply(
@@ -203,16 +216,19 @@ async def main() -> None:
     sink = QueenSink(gateway, bk, mailbox_service=mailbox_service)
     registry = Registry.open(wcfg.db_path)
     router, _ = build_worker_and_router(
-        wcfg, sink, bk, registry, mailbox_service=mailbox_service)
+        wcfg, sink, bk, registry, mailbox_service=mailbox_service
+    )
     dp = build_dispatcher(
-        router, qcfg, mailbox_service=mailbox_service, mailbox=mailbox)
+        router, qcfg, mailbox_service=mailbox_service, mailbox=mailbox
+    )
 
     # No aiohttp app on this path (aiogram polling), so run the CEO-retry
     # sweeper as a background task tied to the polling loop's lifetime.
     retry_task: asyncio.Task[None] | None = None
     if qcfg.mailbox_ceo_retry_interval > 0:
         retry_task = asyncio.create_task(
-            _ceo_retry_loop(mailbox_service, qcfg.mailbox_ceo_retry_interval))
+            _ceo_retry_loop(mailbox_service, qcfg.mailbox_ceo_retry_interval)
+        )
     try:
         await dp.start_polling(bot)
     finally:

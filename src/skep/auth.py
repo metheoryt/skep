@@ -27,12 +27,16 @@ class AuthError(Exception):
 
 
 def _proof(secret: str, first: str, second: str) -> str:
-    return hmac.new(secret.encode(), f"{first}:{second}".encode(),
-                    hashlib.sha256).hexdigest()
+    return hmac.new(
+        secret.encode(), f"{first}:{second}".encode(), hashlib.sha256
+    ).hexdigest()
 
 
 async def handshake_server(
-    send: Send, recv: Recv, secret: str, *,
+    send: Send,
+    recv: Recv,
+    secret: str,
+    *,
     nonce_factory: Callable[[], str] = secrets.token_hex,
 ) -> None:
     server_nonce = nonce_factory()
@@ -50,7 +54,10 @@ async def handshake_server(
 
 
 async def handshake_client(
-    send: Send, recv: Recv, secret: str, *,
+    send: Send,
+    recv: Recv,
+    secret: str,
+    *,
     nonce_factory: Callable[[], str] = secrets.token_hex,
 ) -> None:
     msg = await recv()
@@ -58,8 +65,13 @@ async def handshake_client(
         raise AuthError("expected challenge frame")
     server_nonce = str(msg.get("nonce", ""))
     client_nonce = nonce_factory()
-    await send({"t": "auth", "nonce": client_nonce,
-                "proof": _proof(secret, server_nonce, client_nonce)})
+    await send(
+        {
+            "t": "auth",
+            "nonce": client_nonce,
+            "proof": _proof(secret, server_nonce, client_nonce),
+        }
+    )
     reply = await recv()
     if reply.get("t") == "auth_error":
         raise AuthError("authentication rejected by server")
