@@ -154,3 +154,13 @@ def test_managers_parsed_and_overrides():
     assert cfg.mailbox_depth_cap == 3
     assert cfg.mailbox_dedupe_window == 15.0
     assert cfg.mailbox_body_cap == 1024
+
+
+def test_memory_enabled_defaults_true():
+    env = _worker_env()
+    assert load_worker_config(env).memory_enabled is True
+
+
+def test_memory_enabled_can_be_disabled():
+    env = _worker_env() | {"SKEP_MEMORY_ENABLED": "false"}
+    assert load_worker_config(env).memory_enabled is False
