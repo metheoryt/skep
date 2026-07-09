@@ -45,7 +45,7 @@ class AgentProcess:
         config_dir: str | None = None,
         mcp_url: str | None = None,
         mcp_token: str | None = None,
-    ):
+    ) -> None:
         self._task_text = task_text
         self._cwd = cwd
         self._claude_bin = claude_bin

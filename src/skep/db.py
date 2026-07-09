@@ -60,7 +60,7 @@ def _now() -> str:
 
 
 class Registry:
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
         self._conn.row_factory = sqlite3.Row
 

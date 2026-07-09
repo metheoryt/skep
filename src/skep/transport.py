@@ -56,7 +56,7 @@ class InMemoryEventSink:
     Plan 2 adds a WebSocket EventSink implementing the same interface.
     """
 
-    def __init__(self, inbox: QueenInbox, host: str, profile: str):
+    def __init__(self, inbox: QueenInbox, host: str, profile: str) -> None:
         self._inbox = inbox
         self._host = host
         self._profile = profile

@@ -138,7 +138,7 @@ def build_dispatcher(
         return is_owner(uid, config.owner_id)
 
     @dp.message(Command("spawn"), F.func(owner_only))
-    async def _spawn(message: Message, command: CommandObject):
+    async def _spawn(message: Message, command: CommandObject) -> None:
         parsed = parse_spawn(command.args or "")
         if parsed is None:
             await message.answer(
@@ -157,11 +157,11 @@ def build_dispatcher(
         await message.answer(f"Spawned on {host}/{profile}", parse_mode=None)
 
     @dp.message(Command("ls"), F.func(owner_only))
-    async def _ls(message: Message):
+    async def _ls(message: Message) -> None:
         await message.answer(router.format_ls())
 
     @dp.message(Command("kill"), F.func(owner_only))
-    async def _kill(message: Message, command: CommandObject):
+    async def _kill(message: Message, command: CommandObject) -> None:
         if not command.args or not command.args.strip().isdigit():
             await message.answer("Usage: /kill <ref>", parse_mode=None)
             return
@@ -169,14 +169,14 @@ def build_dispatcher(
         await message.answer("Killed" if ok else "No such task", parse_mode=None)
 
     @dp.message(Command("panic"), F.func(owner_only))
-    async def _panic(message: Message):
+    async def _panic(message: Message) -> None:
         n = await router.cmd_panic()
         await message.answer(f"Panicked {n} workers", parse_mode=None)
 
     if mailbox_service is not None and mailbox is not None:
 
         @dp.message(F.reply_to_message, F.func(owner_only))
-        async def _ceo_reply(message: Message):
+        async def _ceo_reply(message: Message) -> None:
             reply = message.reply_to_message
             source_text = (reply.text or reply.caption or "") if reply else ""
             reply_id = _extract_reply_id(source_text)

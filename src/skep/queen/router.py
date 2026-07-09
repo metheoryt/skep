@@ -15,7 +15,7 @@ class UnknownWorker(Exception):
 class QueenRouter:
     def __init__(
         self, bookkeeping: Bookkeeping, *, now: Callable[[], float] = time.monotonic
-    ):
+    ) -> None:
         self._bk = bookkeeping
         self._workers: dict[tuple[str, str], CommandHandler] = {}
         self._online: set[tuple[str, str]] = set()

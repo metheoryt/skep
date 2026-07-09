@@ -34,7 +34,7 @@ class Supervisor:
         worktree_factory: Callable[[Path, Path, str], None] = create_worktree,
         mailbox_client: MailboxClient | None = None,
         shim_factory: Callable[..., MailboxShim] = MailboxShim,
-    ):
+    ) -> None:
         self._cfg = config
         self._reg = registry
         self._sink = sink

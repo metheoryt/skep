@@ -20,7 +20,7 @@ def build_bot(config: QueenConfig) -> Bot:
 
 
 class Gateway:
-    def __init__(self, bot: Bot, config: QueenConfig):
+    def __init__(self, bot: Bot, config: QueenConfig) -> None:
         self._bot = bot
         self._chat_id = config.group_chat_id
 

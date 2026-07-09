@@ -14,7 +14,7 @@ class QueenSink:
         gateway: Gateway,
         bookkeeping: Bookkeeping,
         mailbox_service: MailboxService | None = None,
-    ):
+    ) -> None:
         self._gw = gateway
         self._bk = bookkeeping
         self._mailbox_service = mailbox_service

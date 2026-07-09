@@ -32,7 +32,7 @@ WORKER_VERSION = "0.1.0"
 class RemoteWorker:
     """A CommandHandler that forwards queen commands to one worker's socket."""
 
-    def __init__(self, ws: web.WebSocketResponse):
+    def __init__(self, ws: web.WebSocketResponse) -> None:
         self._ws = ws
 
     async def spawn(self, repo: str, task: str) -> int:
@@ -58,7 +58,7 @@ class QueenWsServer:
         heartbeat: float = 20.0,
         bookkeeping: Bookkeeping | None = None,
         mailbox_service: MailboxService | None = None,
-    ):
+    ) -> None:
         self._router = router
         self._inbox = inbox
         self._secret = secret
@@ -242,7 +242,7 @@ class WsEventSink:
     switch.target) is what handles cleanup, not an exception from here.
     """
 
-    def __init__(self, ws: aiohttp.ClientWebSocketResponse):
+    def __init__(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         self._ws = ws
 
     async def _send(self, msg: dict[str, Any]) -> None:
@@ -281,7 +281,7 @@ class WorkerWsClient:
         *,
         heartbeat: float = 20.0,
         mailbox_switch: SwitchableMailboxClient | None = None,
-    ):
+    ) -> None:
         self._cfg = config
         self._sup = supervisor
         self._switch = switch

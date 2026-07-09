@@ -13,7 +13,7 @@ SERVICE_TYPE = "_skep-queen._tcp.local."
 
 
 class AsyncServiceHandle:
-    def __init__(self, azc: AsyncZeroconf, info: ServiceInfo):
+    def __init__(self, azc: AsyncZeroconf, info: ServiceInfo) -> None:
         self._azc = azc
         self._info = info
 
