@@ -472,6 +472,17 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 ## Constraints / conventions
 
+- **`ARCHITECTURE.md` (repo root) is the single steady-state concept map — added
+  2026-07-10 because specs/plans record *history*, not the present.** It is
+  hand-written and **overwritten in place**: never add a dated copy, never move it
+  under `docs/superpowers/specs/` (that directory is chronological by design and
+  reproduces the problem). It carries a branch+commit stamp at the top; when it
+  disagrees with code, the code wins and the file gets fixed. It is the only place
+  that says the two numbering axes are orthogonal (Phase 1-4 = control-plane build
+  phasing; L0-L5 = north-star capability layers, "L" = Layer) and that the beehive
+  and corporate metaphors coexist. Keep the sharp-edges section bounded — it is an
+  orientation doc, not a cleanup backlog.
+
 - **Auth is non-negotiable:** every Telegram update rejected unless
   `from_user.id == config.owner_id`. Enforced structurally via a
   `dp.update.outer_middleware` (owner check before routing) PLUS per-handler
