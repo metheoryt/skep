@@ -1,77 +1,10 @@
-from pathlib import Path
-
 import pytest
+from conftest import FakeAgent, RecordingSink, _cfg
 
-from skep.config import WorkerConfig
 from skep.db import Registry
 from skep.stream import Event
 from skep.supervisor import CapacityError, Supervisor
 from skep.workspace import ACCESS_RO, MODE_NEW, MODE_PRIMARY, Root, Workspace
-
-
-def _cfg(tmp_path, max_concurrent=8, memory_enabled=True):
-    return WorkerConfig(
-        host="g16", profile="work", claude_config_dir="/cfg",
-        repos_root=tmp_path / "repos", worktrees_root=tmp_path / "wt",
-        db_path=":memory:", max_concurrent=max_concurrent, claude_bin="claude",
-        memory_enabled=memory_enabled,
-    )
-
-
-@pytest.fixture
-def worker_config_no_memory(tmp_path):
-    return _cfg(tmp_path, memory_enabled=False)
-
-
-class FakeAgent:
-    def __init__(self, events, config_dir=None):
-        self._events = events
-        self.pid = 123
-        self.killed = False
-        self.started = False
-        self.config_dir = config_dir
-
-    async def start(self):
-        self.started = True
-
-    async def events(self):
-        for ev in self._events:
-            yield ev
-
-    async def kill(self):
-        self.killed = True
-
-    @property
-    def returncode(self):
-        return 0
-
-    @property
-    def stderr_text(self):
-        return ""
-
-
-class RecordingSink:
-    def __init__(self):
-        self.events = []
-        self.last_session_local_id = None
-
-    async def task_started(self, local_id, repo, title, session_local_id=None):
-        self.last_session_local_id = session_local_id
-        self.events.append(("started", local_id, repo, title))
-
-    async def activity(self, local_id, line):
-        self.events.append(("activity", local_id, line))
-
-    async def milestone(self, local_id, text):
-        self.events.append(("milestone", local_id, text))
-
-    async def done(self, local_id, status, summary):
-        self.events.append(("done", local_id, status, summary))
-
-
-@pytest.fixture
-def fake_sink():
-    return RecordingSink()
 
 
 async def test_spawn_records_task_and_emits_task_started(tmp_path):

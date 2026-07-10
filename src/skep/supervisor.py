@@ -206,6 +206,60 @@ class Supervisor:
 
         return tid
 
+    async def resume(
+        self, session_local_id: int, *, model: str | None = None
+    ) -> int:
+        if len(self._agents) >= self._cfg.max_concurrent:
+            raise CapacityError(f"at capacity ({self._cfg.max_concurrent} running)")
+        prev = self._reg.latest_invocation(session_local_id)
+        if prev is None:
+            raise ValueError(f"no such session: {session_local_id}")
+        if prev.resume_token is None:
+            raise ValueError(
+                f"session {session_local_id} has no resume_token to resume from"
+            )
+
+        worktree_path = Path(prev.worktree_path)
+        tid = self._reg.add_task(prev.repo, prev.task, prev.worktree_path, mode="native")
+        # A resume is a NEW invocation of the SAME session.
+        self._reg.update(tid, session_local_id=session_local_id, model=model)
+
+        agent: AgentProcess | None = None
+        try:
+            self._reg.log_audit(tid, "resume", f"resume session {session_local_id}")
+            agent_kwargs: dict[str, Any] = dict(
+                task_text=prev.task,
+                cwd=worktree_path,
+                claude_bin=self._cfg.claude_bin,
+                config_dir=self._cfg.claude_config_dir,
+                model=model,
+                resume_token=prev.resume_token,
+                allowed_tools=list(BASE_TOOLS),
+            )
+            agent = self._agent_factory(**agent_kwargs)
+            await agent.start()
+            self._agents[tid] = agent
+            self._reg.update(tid, status="running", pid=agent.pid)
+
+            await self._sink.task_started(tid, prev.repo, prev.task, session_local_id)
+            t = asyncio.create_task(self.run_events(tid, agent))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+        except Exception as exc:
+            self._agents.pop(tid, None)
+            self._reg.update(tid, status="failed")
+            self._reg.log_audit(tid, "error", f"resume failed: {exc}")
+            if agent is not None:
+                try:
+                    await agent.kill()
+                except Exception as kill_exc:
+                    self._reg.log_audit(
+                        tid, "error", f"agent kill failed on resume error: {kill_exc}"
+                    )
+            raise
+
+        return tid
+
     async def run_events(self, task_id: int, agent: AgentProcess) -> None:
         activity_started = False
         terminal = "done"
