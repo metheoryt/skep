@@ -112,6 +112,95 @@ def serialize_fact(fact: MemoryFact) -> str:
     )
 
 
+DEFAULT_MAX_BYTES = 8192
+
+_WRITE_INSTRUCTIONS = (
+    "Record a memory when you learn something that would save the next agent\n"
+    "time and that the repo itself does not already record -- an operational\n"
+    "fact, a constraint you discovered the hard way, or a decision and its\n"
+    "reasoning:\n"
+    "    the `remember` tool (title, body, kind, supersedes)\n"
+    "\n"
+    "If a fact above is now wrong, supersede it rather than adding a\n"
+    "contradiction. Pass the slug in brackets, exactly as shown above:\n"
+    '    remember(title=..., body=..., supersedes="stack-takes-90s-to-come-up")\n'
+    "\n"
+    "Do NOT record what the repo already records -- code structure, git\n"
+    "history, CLAUDE.md. Scratch notes for this task alone: write a file in\n"
+    "your worktree.\n"
+)
+
+
+class MemoryStore:
+    """Reads `<repo>/.agent-memory/` and renders the spawn addendum.
+
+    Implements the `MemoryProbe` protocol, so `Supervisor` needs no change to
+    how it asks for an addendum. No daemon, no subprocess, no timeout -- just
+    filesystem reality (spec §6).
+    """
+
+    def __init__(self, max_bytes: int = DEFAULT_MAX_BYTES) -> None:
+        self._max_bytes = max_bytes
+
+    def _load(self, repo_path: Path) -> list[MemoryFact]:
+        """Never raises. Returns [] when the store is absent or unreadable."""
+        d = memory_dir(repo_path)
+        try:
+            paths = sorted(d.glob("*.md"))
+        except OSError as exc:
+            logger.warning("agent memory unreadable at %s: %s", d, exc)
+            return []
+
+        facts: list[MemoryFact] = []
+        for p in paths:
+            try:
+                text = p.read_text(errors="replace")
+            except OSError as exc:
+                logger.warning("skipping unreadable memory %s: %s", p, exc)
+                continue
+            fact = parse_fact(p.stem, text)
+            if fact is None:
+                logger.warning("skipping malformed memory %s", p)
+                continue
+            if fact.superseded_by is None:
+                facts.append(fact)
+        facts.sort(key=lambda f: f.created, reverse=True)
+        return facts
+
+    def render(self, facts: list[MemoryFact]) -> str:
+        """Zero facts omits the recall section but keeps the write instructions:
+        an agent with nothing to recall can still learn something.
+        """
+        if not facts:
+            return f"## Memory\n\n{_WRITE_INSTRUCTIONS}"
+
+        lines: list[str] = []
+        used = 0
+        shown = 0
+        for f in facts:
+            entry = f"- [{f.slug}] **{f.title}** ({f.kind}): {f.body}\n"
+            if used + len(entry.encode()) > self._max_bytes and shown:
+                break
+            lines.append(entry)
+            used += len(entry.encode())
+            shown += 1
+
+        omitted = len(facts) - shown
+        body = "".join(lines)
+        if omitted:
+            # Explicit, not silent: an agent that believes it has seen all the
+            # memory is worse off than one that knows it has not.
+            body += f"\n... {omitted} older memories omitted\n"
+        return (
+            "## Memory\n\n"
+            "Durable facts other agents learned about this repo:\n\n"
+            f"{body}\n{_WRITE_INSTRUCTIONS}"
+        )
+
+    async def addendum_for(self, repo_path: Path) -> str | None:
+        return self.render(self._load(repo_path))
+
+
 def parse_fact(slug: str, text: str) -> MemoryFact | None:
     """Parse a memory file. Returns None on anything malformed -- never raises."""
     lines = text.splitlines()

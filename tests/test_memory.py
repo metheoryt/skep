@@ -3,6 +3,7 @@ import pytest
 from skep.memory import (
     KINDS,
     MemoryFact,
+    MemoryStore,
     memory_dir,
     parse_fact,
     resolve_memory_file,
@@ -147,3 +148,87 @@ def test_kinds_is_the_closed_vocabulary():
 def test_parse_fact_returns_none_on_malformed(text):
     # §6: skip that file, keep the rest. Never raise.
     assert parse_fact("some-slug", text) is None
+
+
+def _write(repo, slug, title, created, body="b", superseded_by=None, kind="gotcha"):
+    d = repo / ".agent-memory"
+    d.mkdir(exist_ok=True)
+    (d / f"{slug}.md").write_text(
+        serialize_fact(
+            MemoryFact(
+                slug=slug,
+                title=title,
+                kind=kind,
+                created=created,
+                superseded_by=superseded_by,
+                body=body,
+            )
+        )
+    )
+
+
+async def test_addendum_missing_dir_keeps_write_instructions(tmp_path):
+    out = await MemoryStore().addendum_for(tmp_path)
+    assert out is not None
+    assert "remember" in out
+    assert "Durable facts other agents learned" not in out
+
+
+async def test_addendum_renders_slug_verbatim(tmp_path):
+    _write(tmp_path, "stack-90s", "Stack takes 90s", "2026-07-09T10:00:00Z")
+    out = await MemoryStore().addendum_for(tmp_path)
+    # The bracketed slug is load-bearing: it is the string the agent must pass
+    # back as `supersedes`. Unguessable from the title once `-2` exists.
+    assert "[stack-90s]" in out
+    assert "**Stack takes 90s**" in out
+    assert "(gotcha)" in out
+
+
+async def test_addendum_sorts_newest_first(tmp_path):
+    _write(tmp_path, "older", "Older", "2026-07-01T00:00:00Z")
+    _write(tmp_path, "newer", "Newer", "2026-07-09T00:00:00Z")
+    out = await MemoryStore().addendum_for(tmp_path)
+    assert out.index("[newer]") < out.index("[older]")
+
+
+async def test_superseded_facts_excluded_but_file_remains(tmp_path):
+    _write(tmp_path, "old", "Old", "2026-07-01T00:00:00Z", superseded_by="new")
+    _write(tmp_path, "new", "New", "2026-07-09T00:00:00Z")
+    out = await MemoryStore().addendum_for(tmp_path)
+    assert "[old]" not in out
+    assert "[new]" in out
+    assert (tmp_path / ".agent-memory" / "old.md").exists()
+
+
+async def test_one_malformed_file_does_not_blind_the_others(tmp_path):
+    _write(tmp_path, "good", "Good", "2026-07-09T00:00:00Z")
+    (tmp_path / ".agent-memory" / "bad.md").write_text("garbage, no frontmatter")
+    out = await MemoryStore().addendum_for(tmp_path)
+    assert "[good]" in out
+
+
+async def test_byte_cap_truncates_newest_first_and_says_so(tmp_path):
+    for i in range(10):
+        _write(
+            tmp_path,
+            f"fact-{i}",
+            f"Title {i}",
+            f"2026-07-0{i}T00:00:00Z",
+            body="x" * 100,
+        )
+    out = await MemoryStore(max_bytes=300).addendum_for(tmp_path)
+    assert "older memories omitted" in out
+    assert "[fact-9]" in out  # newest survives
+    assert "[fact-0]" not in out  # oldest dropped
+
+
+async def test_unreadable_dir_yields_no_recall_but_keeps_instructions(tmp_path):
+    d = tmp_path / ".agent-memory"
+    d.mkdir()
+    d.chmod(0o000)
+    try:
+        out = await MemoryStore().addendum_for(tmp_path)
+    finally:
+        d.chmod(0o755)
+    assert out is not None and "remember" in out
+    assert "Durable facts other agents learned" not in out

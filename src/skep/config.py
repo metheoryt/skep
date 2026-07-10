@@ -26,6 +26,7 @@ class WorkerConfig:
     use_mdns: bool = True
     claude_bin: str = "claude"
     memory_enabled: bool = True
+    memory_max_bytes: int = 8192
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
         use_mdns=_as_bool(env.get("SKEP_USE_MDNS"), True),
         claude_bin=env.get("SKEP_CLAUDE_BIN", "claude"),
         memory_enabled=_as_bool(env.get("SKEP_MEMORY_ENABLED"), True),
+        memory_max_bytes=int(env.get("SKEP_MEMORY_MAX_BYTES", "8192")),
     )
 
 
