@@ -2,12 +2,52 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shlex
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
+
+MEMORY_DIRNAME = ".agent-memory"
+
+_SLUG_STRIP = re.compile(r"[^a-z0-9]+")
+
+
+def memory_dir(repo_path: Path) -> Path:
+    """The memory store for a repo. Always the PARENT repo, never a worktree."""
+    return repo_path / MEMORY_DIRNAME
+
+
+def slugify(text: str) -> str:
+    """Reduce free text to `[a-z0-9-]+`. Raises ValueError on an empty result.
+
+    `title` is chosen by a language model and becomes a filename, so this is
+    the first of three defences in spec §5.1. It is NOT the last: see
+    `resolve_memory_file`.
+    """
+    slug = _SLUG_STRIP.sub("-", text.lower()).strip("-")
+    if not slug:
+        raise ValueError(f"slugifies to empty: {text!r}")
+    return slug
+
+
+def resolve_memory_file(repo_path: Path, slug: str) -> Path:
+    """Resolve `<repo>/.agent-memory/<slug>.md`, asserting containment.
+
+    Step 3 of spec §5.1, and NOT redundant with `slugify`: it is the assertion
+    that still holds if the slugifier is later "improved" to allow a character
+    it should not, and it catches a symlink whose target escapes the store.
+    """
+    if slug != slugify(slug):
+        raise ValueError(f"not a clean slug: {slug!r}")
+    root = memory_dir(repo_path).resolve()
+    candidate = (root / f"{slug}.md").resolve()
+    if candidate.parent != root:
+        raise ValueError(f"path escapes memory dir: {slug!r}")
+    return candidate
+
 
 PROBE_TIMEOUT = 10.0
 
