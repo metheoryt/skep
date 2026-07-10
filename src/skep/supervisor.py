@@ -15,6 +15,7 @@ from skep.memory import MemoryProbe
 from skep.transport import EventSink, MailboxClient
 from skep.worker.mcp_shim import MailboxShim
 from skep.worker.memory_shim import MEMORY_TOOLS, memory_shim_server
+from skep.workspace import MODE_NEW, Workspace
 
 BASE_TOOLS: tuple[str, ...] = ("Bash", "Edit", "Write")
 """The coding baseline (spec §2.3). `Read` is absent: it needs no grant (§2.5).
@@ -78,25 +79,46 @@ class Supervisor:
         return task
 
     async def spawn(self, repo: str, task: str) -> int:
+        # Legacy / wire entrypoint: one own worktree, read-write, no model.
+        ws = Workspace.single(repo, self._cfg.repos_root / repo)
+        return await self.spawn_workspace(ws, task)
+
+    async def spawn_workspace(
+        self, workspace: Workspace, task: str, *, model: str | None = None
+    ) -> int:
         if len(self._agents) >= self._cfg.max_concurrent:
             raise CapacityError(f"at capacity ({self._cfg.max_concurrent} running)")
-        repo_path = self._cfg.repos_root / repo
-        tid = self._reg.add_task(repo, task, "", mode="native")
-        branch = f"skep/{_slug(task)}-{tid}"
-        worktree_path = self._cfg.worktrees_root / f"{repo}-{tid}"
-        self._reg.update(tid, worktree_path=str(worktree_path))
+
+        head = workspace.roots[0]
+        tid = self._reg.add_task(head.name, task, "", mode="native")
+        # First invocation of a new session keys to its own id (see plan preamble).
+        self._reg.update(tid, session_local_id=tid, model=model)
+
+        # Create a worktree only for a `new` head root (today's behavior);
+        # attach/primary roots use their path as-is.
+        if head.mode == MODE_NEW:
+            branch = f"skep/{_slug(task)}-{tid}"
+            head_path = self._cfg.worktrees_root / f"{head.name}-{tid}"
+        else:
+            branch = None
+            head_path = head.path
+        self._reg.update(tid, worktree_path=str(head_path))
+        add_dirs = list(workspace.add_dir_paths)
 
         agent: AgentProcess | None = None
         shim: MailboxShim | None = None
         try:
-            self._worktree_factory(repo_path, worktree_path, branch)
-            self._reg.log_audit(tid, "spawn", f"{repo}: {task}")
+            if head.mode == MODE_NEW:
+                self._worktree_factory(head.path, head_path, branch)
+            self._reg.log_audit(tid, "spawn", f"{head.name}: {task}")
 
             agent_kwargs: dict[str, Any] = dict(
                 task_text=task,
-                cwd=worktree_path,
+                cwd=head_path,
                 claude_bin=self._cfg.claude_bin,
                 config_dir=self._cfg.claude_config_dir,
+                add_dirs=add_dirs,
+                model=model,
             )
             mcp_servers: dict[str, dict] = {}
             allowed_tools: list[str] = list(BASE_TOOLS)
@@ -104,11 +126,15 @@ class Supervisor:
             if self._cfg.memory_enabled:
                 # Read is a soft dependency: a broken store must never fail a
                 # spawn, and must never take down the WRITE channel either
-                # (spec §6). `repo_path` is the PARENT repo -- a fact must
-                # survive task failure and branch abandonment.
+                # (spec §6). `roots` carries the PARENT repos, not the
+                # worktree -- a fact must survive task failure and branch
+                # abandonment.
+                roots = [(r.name, r.path) for r in workspace.roots]
                 if self._memory is not None:
                     try:
-                        addendum = await self._memory.addendum_for([repo_path])
+                        addendum = await self._memory.addendum_for(
+                            [p for _, p in roots]
+                        )
                     except Exception as exc:
                         self._reg.log_audit(tid, "error", f"memory read failed: {exc}")
                         addendum = None
@@ -117,7 +143,7 @@ class Supervisor:
                 # The shim is a stdio subprocess of `claude`, not of skep: no
                 # start(), no _shims entry, no teardown, no leak on a failed
                 # spawn (spec §5.2).
-                mcp_servers["memory"] = memory_shim_server([(repo, repo_path)])
+                mcp_servers["memory"] = memory_shim_server(roots)
                 allowed_tools += MEMORY_TOOLS
 
             if self._mailbox_client is not None:
@@ -151,7 +177,7 @@ class Supervisor:
             # which must undo the dict commits above and terminate whatever
             # was already started -- otherwise the shim's live server/socket
             # and the agent subprocess leak forever (see Task 10 review).
-            await self._sink.task_started(tid, repo, task)
+            await self._sink.task_started(tid, head.name, task, tid)
             t = asyncio.create_task(self.run_events(tid, agent))
             self._tasks.add(t)
             t.add_done_callback(self._tasks.discard)

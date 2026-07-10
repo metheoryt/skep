@@ -17,13 +17,16 @@ def _cfg(tmp_path, max_concurrent=8):
 
 class FakeAgent:
     def __init__(self, task_text, cwd, claude_bin, config_dir=None,
-                 mcp_servers=None, allowed_tools=None):
+                 mcp_servers=None, allowed_tools=None,
+                 add_dirs=None, model=None):
         self.task_text = task_text
         self.cwd = cwd
         self.claude_bin = claude_bin
         self.config_dir = config_dir
         self.mcp_servers = mcp_servers
         self.allowed_tools = allowed_tools
+        self.add_dirs = add_dirs
+        self.model = model
         self.pid = 123
         self.killed = False
         self.started = False
@@ -61,7 +64,7 @@ class RecordingSink:
     def __init__(self):
         self.events = []
 
-    async def task_started(self, local_id, repo, title):
+    async def task_started(self, local_id, repo, title, session_local_id=None):
         self.events.append(("started", local_id, repo, title))
 
     async def activity(self, local_id, line):
@@ -167,10 +170,11 @@ async def test_spawn_without_mailbox_client_passes_no_mcp_url(tmp_path):
 async def test_existing_agent_factory_signature_unaffected_when_no_mailbox(tmp_path):
     """Regression guard: an agent_factory that predates the mailbox/memory
     kwargs still works when mailbox_client is None -- as long as it accepts
-    (and may ignore) `mcp_servers`/`allowed_tools`. Those two are NOT forced
-    conditionally: `allowed_tools` (the BASE_TOOLS grant) is passed on every
+    (and may ignore) `mcp_servers`/`allowed_tools`/`add_dirs`/`model`. These
+    are NOT forced conditionally: `allowed_tools` (the BASE_TOOLS grant) and
+    `add_dirs`/`model` (workspace rendering, Task 7) are passed on every
     spawn regardless of mailbox/memory state (spec §2.1), so a factory that
-    does not accept it at all is no longer a supported shape -- only the
+    does not accept them at all is no longer a supported shape -- only the
     absence of a "mailbox" mcp_servers entry is guaranteed here."""
     cfg = _cfg(tmp_path)
     reg = Registry.open(":memory:")
@@ -178,7 +182,8 @@ async def test_existing_agent_factory_signature_unaffected_when_no_mailbox(tmp_p
     captured = {}
 
     def agent_factory(task_text, cwd, claude_bin, config_dir=None,
-                       mcp_servers=None, allowed_tools=None):
+                       mcp_servers=None, allowed_tools=None,
+                       add_dirs=None, model=None):
         captured["config_dir"] = config_dir
         return FakeAgent(task_text, cwd, claude_bin, config_dir)
 
@@ -284,7 +289,7 @@ async def test_spawn_sink_failure_stops_shim_and_agent(tmp_path):
     agents = []
 
     class FailingSink:
-        async def task_started(self, local_id, repo, title):
+        async def task_started(self, local_id, repo, title, session_local_id=None):
             raise RuntimeError("boom: sink failed")
 
         async def activity(self, local_id, line):
