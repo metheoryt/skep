@@ -1,7 +1,12 @@
 # skep
 
 Per-machine supervisor daemon that dispatches headless Claude Code agents from
-Telegram. See `docs/superpowers/specs/` for the design.
+Telegram.
+
+**New here? Read [`ARCHITECTURE.md`](ARCHITECTURE.md)** — what skep is, how a
+Telegram message becomes a running agent, and a glossary of the vocabulary
+(`queen`, `worker`, the L0–L5 ladder). The specs under `docs/superpowers/specs/`
+record *why* each decision was made, on the day it was made; some are superseded.
 
 ## Setup
 
