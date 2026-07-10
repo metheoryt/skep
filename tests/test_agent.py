@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from skep.agent import AgentProcess, _agent_env, create_worktree
 from skep.stream import Event
@@ -47,3 +48,28 @@ def test_argv_omits_input_format_for_phase1(tmp_path):
     assert "--input-format" not in argv
     assert "--output-format" in argv
     assert "stream-json" in argv
+
+
+def test_argv_renders_add_dir_model_resume(tmp_path):
+    agent = AgentProcess(
+        task_text="do it",
+        cwd=tmp_path,
+        claude_bin="claude",
+        add_dirs=[Path("/repos/main"), Path("/repos/shared")],
+        model="claude-sonnet-5",
+        resume_token="sess-xyz",
+    )
+    argv = agent._argv()
+    assert argv[:2] == ["claude", "-p"]
+    assert argv.count("--add-dir") == 2
+    assert "/repos/main" in argv and "/repos/shared" in argv
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-5"
+    assert argv[argv.index("--resume") + 1] == "sess-xyz"
+
+
+def test_argv_omits_new_flags_by_default(tmp_path):
+    agent = AgentProcess(task_text="t", cwd=tmp_path, claude_bin="claude")
+    argv = agent._argv()
+    assert "--add-dir" not in argv
+    assert "--model" not in argv
+    assert "--resume" not in argv

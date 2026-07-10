@@ -46,6 +46,9 @@ class AgentProcess:
         mcp_servers: dict[str, dict] | None = None,
         allowed_tools: list[str] | None = None,
         append_system_prompt: str | None = None,
+        add_dirs: list[Path] | None = None,
+        model: str | None = None,
+        resume_token: str | None = None,
     ) -> None:
         self._task_text = task_text
         self._cwd = cwd
@@ -54,6 +57,9 @@ class AgentProcess:
         self._mcp_servers = mcp_servers
         self._allowed_tools = allowed_tools
         self._append_system_prompt = append_system_prompt
+        self._add_dirs = add_dirs
+        self._model = model
+        self._resume_token = resume_token
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr: bytes = b""
         self._stderr_task: asyncio.Task | None = None
@@ -83,6 +89,13 @@ class AgentProcess:
             # The enumeration must be COMPLETE -- skep never relies on a host
             # profile's allowlist surviving this flag (spec §2.2).
             argv += ["--allowedTools", ",".join(self._allowed_tools)]
+        if self._add_dirs:
+            for d in self._add_dirs:
+                argv += ["--add-dir", str(d)]
+        if self._model is not None:
+            argv += ["--model", self._model]
+        if self._resume_token is not None:
+            argv += ["--resume", self._resume_token]
         return argv
 
     @property
