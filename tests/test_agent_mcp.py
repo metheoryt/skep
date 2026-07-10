@@ -55,8 +55,11 @@ def test_both_servers_coexist_in_one_map():
     assert cfg["mcpServers"]["memory"]["type"] == "stdio"
 
 
-def test_memory_key_makes_the_grant_name_correct():
-    # `mcp__memory__remember` is only correct because the key is "memory".
+def test_memory_server_key_survives_mcp_config_serialization():
+    # The map key becomes the grant prefix (mcp__memory__*). That the grant
+    # actually follows the map key rather than the advertised FastMCP name is
+    # proven by tests/integration/test_two_mcp_servers.py, NOT here; this only
+    # pins that the key we set survives serialization into --mcp-config.
     argv = _argv(mcp_servers={"memory": _memory()})
     cfg = json.loads(argv[argv.index("--mcp-config") + 1])
     assert "memory" in cfg["mcpServers"]
@@ -68,11 +71,14 @@ def test_allowed_tools_passed_comma_joined():
     assert argv[argv.index("--allowedTools") + 1] == expected
 
 
-def test_read_is_not_in_any_grant_we_pass():
-    # spec §2.5: Read needs no grant. Passing it would be harmless but is not
-    # the design; this test pins the decision so a drive-by cannot widen it.
+def test_argv_emits_the_grant_verbatim_adding_nothing():
+    # AgentProcess is not the layer that decides the grant (Supervisor is); it
+    # must emit exactly the tools it was handed, injecting nothing. If it
+    # silently added a tool (e.g. Read), the enumeration would be wider than
+    # intended. (That Read is absent from the DESIGNED grant is pinned at
+    # Supervisor level by test_base_tools_grant_write_but_not_read.)
     argv = _argv(allowed_tools=["Bash", "Edit", "Write"])
-    assert "Read" not in argv[argv.index("--allowedTools") + 1].split(",")
+    assert argv[argv.index("--allowedTools") + 1] == "Bash,Edit,Write"
 
 
 def test_append_system_prompt_coexists_with_mcp_config_and_grant():

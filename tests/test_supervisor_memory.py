@@ -1,6 +1,7 @@
 from skep.config import WorkerConfig
 from skep.db import Registry
 from skep.supervisor import BASE_TOOLS, MAILBOX_TOOLS, Supervisor
+from skep.worker.memory_shim import MEMORY_TOOLS
 
 
 def _cfg(tmp_path, memory_enabled=True):
@@ -183,8 +184,10 @@ async def test_both_servers_when_mailbox_is_on(tmp_path):
     assert set(captured["mcp_servers"]) == {"memory", "mailbox"}
     assert captured["mcp_servers"]["memory"]["type"] == "stdio"
     assert captured["mcp_servers"]["mailbox"]["type"] == "http"
-    assert "mcp__memory__remember" in captured["allowed_tools"]
-    assert "mcp__mailbox__send_message" in captured["allowed_tools"]
+    # Pin the COMPOSED grant exactly, in assembly order (BASE, MEMORY, MAILBOX).
+    # A loose `in` check would pass a widened assembly -- a stray "Read", a
+    # wildcard, a duplicate. The grant is the security boundary; assert it whole.
+    assert captured["allowed_tools"] == [*BASE_TOOLS, *MEMORY_TOOLS, *MAILBOX_TOOLS]
 
 
 async def test_memory_disabled_omits_server_and_grant(tmp_path):
