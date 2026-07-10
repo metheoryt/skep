@@ -1,4 +1,5 @@
 import logging
+import os
 
 import pytest
 
@@ -169,6 +170,13 @@ def _write(repo, slug, title, created, body="b", superseded_by=None, kind="gotch
     )
 
 
+requires_non_root = pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="chmod 0o000 does not restrict root; "
+    "the unreadable path would not be exercised",
+)
+
+
 async def test_addendum_missing_dir_keeps_write_instructions(tmp_path):
     out = await MemoryStore().addendum_for(tmp_path)
     assert out is not None
@@ -224,9 +232,10 @@ async def test_byte_cap_truncates_newest_first_and_says_so(tmp_path):
     assert "[fact-0]" not in out  # oldest dropped
 
 
+@requires_non_root
 async def test_unreadable_dir_yields_no_recall_but_keeps_instructions(caplog, tmp_path):
-    # Not run as root in this environment, so chmod 0o000 genuinely denies
-    # access (see task-3 fix-pass report for the root caveat).
+    # chmod 0o000 only denies access for a non-root uid, hence the guard. For
+    # the uid-independent case see test_agent_memory_as_regular_file_* below.
     d = tmp_path / ".agent-memory"
     d.mkdir()
     d.chmod(0o000)
@@ -235,6 +244,21 @@ async def test_unreadable_dir_yields_no_recall_but_keeps_instructions(caplog, tm
             out = await MemoryStore().addendum_for(tmp_path)
     finally:
         d.chmod(0o755)
+    assert out is not None and "remember" in out
+    assert "Durable facts other agents learned" not in out
+    assert len(caplog.records) == 1
+
+
+async def test_agent_memory_as_regular_file_yields_no_recall_and_one_warning(
+    caplog, tmp_path
+):
+    # `.agent-memory` existing as a plain file (not a directory) is unreadable
+    # in the same "cannot scan as a directory" sense as a 0o000 dir, but this
+    # path is uid-INDEPENDENT: iterdir() raises NotADirectoryError for root and
+    # non-root alike, so this guards Finding 1 even where the chmod test skips.
+    (tmp_path / ".agent-memory").write_text("i am a file, not a directory")
+    with caplog.at_level(logging.WARNING, logger="skep.memory"):
+        out = await MemoryStore().addendum_for(tmp_path)
     assert out is not None and "remember" in out
     assert "Durable facts other agents learned" not in out
     assert len(caplog.records) == 1
@@ -256,6 +280,7 @@ async def test_malformed_files_produce_one_aggregate_warning(caplog, tmp_path):
     assert "bad3.md" in msg
 
 
+@requires_non_root
 async def test_unreadable_and_malformed_file_share_one_warning(caplog, tmp_path):
     _write(tmp_path, "good", "Good", "2026-07-09T00:00:00Z")
     d = tmp_path / ".agent-memory"
