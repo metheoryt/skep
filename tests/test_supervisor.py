@@ -102,7 +102,7 @@ async def test_run_events_emits_activity_milestone_done(tmp_path):
 
     task = reg.get_task(tid)
     assert task.status == "done"
-    assert task.session_id == "s9"
+    assert task.resume_token == "s9"
     kinds = [e[0] for e in sink.events]
     assert "activity" in kinds and "milestone" in kinds and "done" in kinds
     assert ("done", tid, "done", "finished") in sink.events

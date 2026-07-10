@@ -188,13 +188,13 @@ class Supervisor:
         try:
             async for ev in agent.events():
                 if ev.kind == "system" and ev.session_id:
-                    self._reg.update(task_id, session_id=ev.session_id)
+                    self._reg.update(task_id, resume_token=ev.session_id)
                 if ev.kind == "result":
                     saw_result = True
                     summary = ev.text
                     self._reg.update(
                         task_id,
-                        session_id=ev.session_id or self._task(task_id).session_id,
+                        resume_token=ev.session_id or self._task(task_id).resume_token,
                     )
                     terminal = "failed" if ev.is_error else "done"
 

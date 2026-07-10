@@ -4,6 +4,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+SCHEMA_VERSION = 1
+
+# Baseline (v0) schema. Both fresh and pre-existing DBs are migrated up to
+# SCHEMA_VERSION by _migrate(); keeping the baseline here means one code path.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +36,9 @@ _TASK_COLUMNS = (
     "repo",
     "task",
     "worktree_path",
-    "session_id",
+    "resume_token",
+    "model",
+    "session_local_id",
     "pid",
     "topic_id",
     "mode",
@@ -47,7 +53,9 @@ class Task:
     repo: str
     task: str
     worktree_path: str
-    session_id: str | None
+    resume_token: str | None
+    model: str | None
+    session_local_id: int | None
     pid: int | None
     topic_id: int | None
     mode: str
@@ -57,6 +65,22 @@ class Task:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version < 1:
+        # v0 -> v1: rename session_id -> resume_token; add model +
+        # session_local_id; back-fill session_local_id to the row's own id
+        # (each existing task becomes a one-invocation session).
+        conn.execute("ALTER TABLE tasks RENAME COLUMN session_id TO resume_token")
+        conn.execute("ALTER TABLE tasks ADD COLUMN model TEXT")
+        conn.execute("ALTER TABLE tasks ADD COLUMN session_local_id INTEGER")
+        conn.execute(
+            "UPDATE tasks SET session_local_id = id WHERE session_local_id IS NULL"
+        )
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
 
 
 class Registry:
@@ -69,6 +93,7 @@ class Registry:
         conn = sqlite3.connect(path)
         conn.executescript(_SCHEMA)
         conn.commit()
+        _migrate(conn)
         return cls(conn)
 
     def add_task(
