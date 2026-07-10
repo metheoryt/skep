@@ -251,8 +251,12 @@ class WsEventSink:
         except (aiohttp.ClientError, ConnectionError, RuntimeError) as exc:
             logger.warning("dropped event send on dying socket: %r", exc)
 
-    async def task_started(self, local_id: int, repo: str, title: str) -> None:
-        await self._send(wire.task_started_msg(local_id, repo, title))
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None:
+        await self._send(
+            wire.task_started_msg(local_id, repo, title, session_local_id)
+        )
 
     async def activity(self, local_id: int, line: str) -> None:
         await self._send(wire.activity_msg(local_id, line))

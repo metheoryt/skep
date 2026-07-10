@@ -11,7 +11,9 @@ from skep.queen.mailbox import MailboxService, Message
 class EventSink(Protocol):
     """Worker -> queen. The worker's Supervisor calls these; identity is implicit."""
 
-    async def task_started(self, local_id: int, repo: str, title: str) -> None: ...
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None: ...
     async def activity(self, local_id: int, line: str) -> None: ...
     async def milestone(self, local_id: int, text: str) -> None: ...
     async def done(self, local_id: int, status: str, summary: str) -> None: ...
@@ -61,7 +63,10 @@ class InMemoryEventSink:
         self._host = host
         self._profile = profile
 
-    async def task_started(self, local_id: int, repo: str, title: str) -> None:
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None:
+        # session_local_id is A2's; the in-memory queen ignores it for now.
         await self._inbox.on_task_started(
             self._host, self._profile, local_id, repo, title
         )
@@ -84,9 +89,11 @@ class SwitchableEventSink:
     def __init__(self) -> None:
         self.target: EventSink | None = None
 
-    async def task_started(self, local_id: int, repo: str, title: str) -> None:
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None:
         if self.target is not None:
-            await self.target.task_started(local_id, repo, title)
+            await self.target.task_started(local_id, repo, title, session_local_id)
 
     async def activity(self, local_id: int, line: str) -> None:
         if self.target is not None:

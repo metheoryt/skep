@@ -39,7 +39,7 @@ class _Rec:
     def __init__(self):
         self.calls = []
 
-    async def task_started(self, local_id, repo, title):
+    async def task_started(self, local_id, repo, title, session_local_id=None):
         self.calls.append(("task_started", local_id, repo, title))
 
     async def activity(self, local_id, line):
@@ -65,3 +65,16 @@ async def test_switchable_drops_when_detached():
     s.target = None
     await s.activity(1, "line")  # no target -> no error, dropped
     await s.done(1, "done", "ok")
+
+
+async def test_in_memory_sink_accepts_session_local_id():
+    recorded = {}
+
+    class RecordingInbox:
+        async def on_task_started(self, host, profile, local_id, repo, title):
+            recorded.update(local_id=local_id, repo=repo, title=title)
+
+    sink = InMemoryEventSink(RecordingInbox(), "h1", "default")
+    await sink.task_started(7, "nix", "t", 7)   # 4-arg is the new contract
+    await sink.task_started(8, "nix", "t")       # 3-arg still valid (optional)
+    assert recorded["local_id"] == 8

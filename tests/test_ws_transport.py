@@ -365,3 +365,14 @@ async def test_ws_event_sink_swallows_send_error_on_dying_socket():
     await sink.activity(1, "still going")
     await sink.milestone(1, "checkpoint")
     await sink.done(1, "done", "ok")
+
+
+def test_task_started_msg_includes_session_local_id():
+    msg = wire.task_started_msg(7, "nix", "t", 3)
+    assert msg["local_id"] == 7
+    assert msg["session_local_id"] == 3
+
+
+def test_task_started_msg_defaults_session_local_id_none():
+    msg = wire.task_started_msg(7, "nix", "t")
+    assert msg["session_local_id"] is None

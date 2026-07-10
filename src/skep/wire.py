@@ -50,8 +50,16 @@ def heartbeat_msg(
     }
 
 
-def task_started_msg(local_id: int, repo: str, title: str) -> dict[str, Any]:
-    return {"t": TASK_STARTED, "local_id": local_id, "repo": repo, "title": title}
+def task_started_msg(
+    local_id: int, repo: str, title: str, session_local_id: int | None = None
+) -> dict[str, Any]:
+    return {
+        "t": TASK_STARTED,
+        "local_id": local_id,
+        "repo": repo,
+        "title": title,
+        "session_local_id": session_local_id,
+    }
 
 
 def activity_msg(local_id: int, line: str) -> dict[str, Any]:
