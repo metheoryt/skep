@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from skep.memory import (
@@ -222,13 +224,62 @@ async def test_byte_cap_truncates_newest_first_and_says_so(tmp_path):
     assert "[fact-0]" not in out  # oldest dropped
 
 
-async def test_unreadable_dir_yields_no_recall_but_keeps_instructions(tmp_path):
+async def test_unreadable_dir_yields_no_recall_but_keeps_instructions(caplog, tmp_path):
+    # Not run as root in this environment, so chmod 0o000 genuinely denies
+    # access (see task-3 fix-pass report for the root caveat).
     d = tmp_path / ".agent-memory"
     d.mkdir()
     d.chmod(0o000)
     try:
-        out = await MemoryStore().addendum_for(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="skep.memory"):
+            out = await MemoryStore().addendum_for(tmp_path)
     finally:
         d.chmod(0o755)
     assert out is not None and "remember" in out
     assert "Durable facts other agents learned" not in out
+    assert len(caplog.records) == 1
+
+
+async def test_malformed_files_produce_one_aggregate_warning(caplog, tmp_path):
+    _write(tmp_path, "good", "Good", "2026-07-09T00:00:00Z")
+    d = tmp_path / ".agent-memory"
+    (d / "bad1.md").write_text("garbage, no frontmatter")
+    (d / "bad2.md").write_text("also garbage")
+    (d / "bad3.md").write_text("---\ntitle: unquoted\n---\nbody")
+    with caplog.at_level(logging.WARNING, logger="skep.memory"):
+        out = await MemoryStore().addendum_for(tmp_path)
+    assert "[good]" in out
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    assert "bad1.md" in msg
+    assert "bad2.md" in msg
+    assert "bad3.md" in msg
+
+
+async def test_unreadable_and_malformed_file_share_one_warning(caplog, tmp_path):
+    _write(tmp_path, "good", "Good", "2026-07-09T00:00:00Z")
+    d = tmp_path / ".agent-memory"
+    (d / "bad.md").write_text("garbage, no frontmatter")
+    unreadable = d / "secret.md"
+    unreadable.write_text(
+        '---\ntitle: "x"\nkind: gotcha\ncreated: 2026-07-01T00:00:00Z\n---\nb'
+    )
+    unreadable.chmod(0o000)
+    try:
+        with caplog.at_level(logging.WARNING, logger="skep.memory"):
+            out = await MemoryStore().addendum_for(tmp_path)
+    finally:
+        unreadable.chmod(0o644)
+    assert "[good]" in out
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    assert "bad.md" in msg
+    assert "secret.md" in msg
+
+
+async def test_clean_directory_emits_no_warnings(caplog, tmp_path):
+    _write(tmp_path, "good", "Good", "2026-07-09T00:00:00Z")
+    with caplog.at_level(logging.WARNING, logger="skep.memory"):
+        out = await MemoryStore().addendum_for(tmp_path)
+    assert "[good]" in out
+    assert len(caplog.records) == 0

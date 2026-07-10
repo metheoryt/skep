@@ -143,27 +143,55 @@ class MemoryStore:
         self._max_bytes = max_bytes
 
     def _load(self, repo_path: Path) -> list[MemoryFact]:
-        """Never raises. Returns [] when the store is absent or unreadable."""
+        """Never raises. Returns [] when the store is absent or unreadable.
+
+        `Path.glob()` swallows `OSError` while scanning a directory (an
+        unreadable dir, or a `.agent-memory` that is a plain file, both yield
+        an empty iterator) -- so it cannot tell "absent" from "unreadable"
+        apart, and the latter must still be logged. `iterdir()` does not
+        swallow: it raises `FileNotFoundError` for "absent" (silent -- no
+        memory store is not an error) and any other `OSError`
+        (`PermissionError`, `NotADirectoryError`, ...) for "unreadable"
+        (logged once).
+        """
         d = memory_dir(repo_path)
         try:
-            paths = sorted(d.glob("*.md"))
+            entries = list(d.iterdir())
+        except FileNotFoundError:
+            return []
         except OSError as exc:
             logger.warning("agent memory unreadable at %s: %s", d, exc)
             return []
 
+        paths = sorted(p for p in entries if p.suffix == ".md")
+
         facts: list[MemoryFact] = []
+        skipped: list[str] = []
         for p in paths:
             try:
                 text = p.read_text(errors="replace")
-            except OSError as exc:
-                logger.warning("skipping unreadable memory %s: %s", p, exc)
+            except OSError:
+                skipped.append(p.name)
                 continue
             fact = parse_fact(p.stem, text)
             if fact is None:
-                logger.warning("skipping malformed memory %s", p)
+                skipped.append(p.name)
                 continue
             if fact.superseded_by is None:
                 facts.append(fact)
+
+        if skipped:
+            # One line per _load(), not one per file: a spawn calls this on
+            # every launch, so N corrupt files must not mean N log lines
+            # forever. Bounded to 5 names so a fully-corrupt directory still
+            # produces one short line.
+            logger.warning(
+                "skipping %d unusable memory file(s) in %s: %s",
+                len(skipped),
+                d,
+                ", ".join(sorted(skipped)[:5]),
+            )
+
         facts.sort(key=lambda f: f.created, reverse=True)
         return facts
 

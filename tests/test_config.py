@@ -164,3 +164,13 @@ def test_memory_enabled_defaults_true():
 def test_memory_enabled_can_be_disabled():
     env = _worker_env() | {"SKEP_MEMORY_ENABLED": "false"}
     assert load_worker_config(env).memory_enabled is False
+
+
+def test_memory_max_bytes_defaults_8192():
+    env = _worker_env()
+    assert load_worker_config(env).memory_max_bytes == 8192
+
+
+def test_memory_max_bytes_override():
+    env = _worker_env() | {"SKEP_MEMORY_MAX_BYTES": "4096"}
+    assert load_worker_config(env).memory_max_bytes == 4096
