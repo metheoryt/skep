@@ -1,6 +1,6 @@
 # Sessions A1 — Worker Invocations Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Execute tasks in the order written** — the order is chosen so the test suite is green at every commit (see "Ordering & the green-at-every-commit contract" below).
 
 **Goal:** Make the worker's unit of execution an **Invocation** — a resumable, model-selectable run over a multi-root workspace — so one durable Session (owned later by the queen) can have many invocations on the same worktree.
 
@@ -19,6 +19,17 @@
 - **The migration must be tested against a persisted old-schema DB file, never `:memory:`.** `CREATE TABLE IF NOT EXISTS` makes column additions silent no-ops on an existing DB, and an in-memory DB is always built fresh — so an in-memory "migration" test proves nothing. Seed a file, migrate it, assert.
 - **Queen-side, Telegram, workspace-name→path resolution, and the `primary:rw` lease are OUT of scope** (they are A2 / C / E). A1 accepts an already-resolved list of local roots and reads `session_local_id`; it never talks to the queen registry or acquires a lease.
 
+## Ordering & the green-at-every-commit contract
+
+Three signature changes each span a producer (`Supervisor`) and its consumers: (1) `task_started` gains `session_local_id` across the `EventSink` protocol + three sink impls; (2) the memory functions (`write_memory`, `addendum_for`, `memory_shim_server`) change parameter *types*; (3) `Supervisor.spawn` is rewritten to call the new memory shapes and emit the new `task_started` arg. If these land in the wrong order the suite goes red between commits, which breaks a between-task reviewer.
+
+Two rules keep every commit green:
+
+- **`session_local_id` is optional (`int | None = None`)** on the wire message, the `EventSink` protocol, and all three impls. That decouples the sink change (Task 5): it lands early, old 3-arg call sites keep compiling, and the workspace-aware spawn (Task 7) passes the real value. By the end of A1 every emit carries a real id; A2 tightens it to required when it wires consumption.
+- **Each memory signature flip co-locates with its `Supervisor` call-site update in the same commit, leaf before integrator.** The memory type change (Task 6) also patches the *current* `spawn`'s two memory call sites, and lands *before* the spawn→`spawn_workspace` rewrite (Task 7). `Supervisor.spawn` is the only production caller of `memory_shim_server`/`addendum_for` (verified against recon; confirm with a grep in Task 6).
+
+Resulting task order: **1 migration → 2 invocation queries → 3 argv flags → 4 workspace type → 5 `task_started` (optional) → 6 multi-root memory (+ patch current spawn) → 7 `spawn_workspace` → 8 `resume`.**
+
 ---
 
 ## File Structure
@@ -31,13 +42,13 @@
 **Modified files:**
 - `src/skep/db.py` — Registry schema migration (`PRAGMA user_version`), `session_id`→`resume_token` rename, new `model` + `session_local_id` columns, invocation query methods.
 - `src/skep/agent.py` — `AgentProcess` renders `--add-dir`, `--model`, `--resume`.
-- `src/skep/supervisor.py` — `spawn` delegates to a workspace-aware `spawn_workspace`; new `resume`; sets `session_local_id`; wires multi-root memory; emits `session_local_id` on `task_started`.
-- `src/skep/worker/memory_shim.py` — `memory_shim_server` takes named roots; `remember` gains a `project` argument.
-- `src/skep/memory.py` — `write_memory` targets a chosen root; the addendum unions all roots' stores.
-- `src/skep/wire.py` — `task_started_msg` gains `session_local_id`.
-- `src/skep/transport.py` — `EventSink.task_started` (+ 3 impls) gains `session_local_id`.
+- `src/skep/wire.py` — `task_started_msg` gains optional `session_local_id`.
+- `src/skep/transport.py` — `EventSink.task_started` (+ 3 impls) gains optional `session_local_id`.
 - `src/skep/ws_transport.py` — `WsEventSink.task_started` forwards `session_local_id`.
-- `tests/test_db.py`, `tests/test_supervisor*.py`, `tests/test_memory*.py`, `tests/worker/test_memory_shim.py`, `tests/test_agent.py` — updated for the renamed column and new signatures.
+- `src/skep/memory.py` — `write_memory` targets a chosen root; the addendum unions all roots' stores; `MemoryProbe` matches.
+- `src/skep/worker/memory_shim.py` — `memory_shim_server` takes named roots; `remember` gains a `project` argument.
+- `src/skep/supervisor.py` — rename references; patch memory call sites (Task 6); `spawn` delegates to a workspace-aware `spawn_workspace`; new `resume`; sets `session_local_id`; emits it on `task_started`.
+- `tests/test_db.py`, `tests/test_agent.py`, `tests/test_transport.py`, `tests/test_ws_transport.py`, `tests/test_memory*.py`, `tests/worker/test_memory_shim.py`, `tests/test_supervisor*.py` — updated for the renamed column and new signatures.
 
 ---
 
@@ -45,7 +56,7 @@
 
 **Files:**
 - Modify: `src/skep/db.py`
-- Modify: `src/skep/supervisor.py` (rename references to the `session_id` column)
+- Modify: `src/skep/supervisor.py` (rename references to the `session_id` column — confirmed by grep to be `run_events` only, lines ~191 and ~197)
 - Modify: `tests/test_db.py` (rename references; add migration test)
 - Test: `tests/test_db.py`
 
@@ -57,9 +68,14 @@
   - `_TASK_COLUMNS` includes `resume_token`, `model`, `session_local_id` (so `Registry.update(...)` accepts them).
   - Module constant `SCHEMA_VERSION: int = 1`.
 
-- [ ] **Step 1: Write the failing migration test**
+- [ ] **Step 1: Confirm the rename is contained**
 
-Add to `tests/test_db.py` (keep existing imports; add `import sqlite3` if absent):
+Run: `grep -rn "\.session_id" src/`
+Expected: only `src/skep/supervisor.py` lines ~190–197. Lines 190/191/197 reference `ev.session_id` (the Claude stream `Event` — leave those) and one `self._task(task_id).session_id` (the `Task` field — this is the rename target). If any other file reads `Task.session_id`, add it to this task's rename set before proceeding.
+
+- [ ] **Step 2: Write the failing migration test**
+
+Add to `tests/test_db.py` (add `import sqlite3` if absent):
 
 ```python
 def test_open_migrates_old_schema_file(tmp_path):
@@ -102,12 +118,12 @@ def test_open_migrates_old_schema_file(tmp_path):
     assert reg._conn.execute("PRAGMA user_version").fetchone()[0] == 1
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_db.py::test_open_migrates_old_schema_file -v`
 Expected: FAIL — `AttributeError: 'Task' object has no attribute 'resume_token'` (or a KeyError building the Task).
 
-- [ ] **Step 3: Implement the schema + migration**
+- [ ] **Step 4: Implement the schema + migration**
 
 In `src/skep/db.py`, replace `_SCHEMA`, `_TASK_COLUMNS`, the `Task` dataclass, and `Registry.open`, and add the migration function. `_SCHEMA` stays the **baseline (v0)** shape so fresh and existing DBs both flow through the same migration path:
 
@@ -200,11 +216,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
 ```
 
-Note: `ALTER TABLE ... RENAME COLUMN` requires SQLite ≥ 3.25 (2018); the Python 3.12 stdlib bundles far newer. `_row_to_task`, `get_task`, `list_all`, `list_active`, `update`, `add_task` need no change — they iterate `_TASK_COLUMNS` and whitelist against it.
+`ALTER TABLE ... RENAME COLUMN` requires SQLite ≥ 3.25 (2018); the Python 3.12 stdlib bundles far newer. `_row_to_task`, `get_task`, `list_all`, `list_active`, `update`, `add_task` need no change — they iterate `_TASK_COLUMNS` and whitelist against it.
 
-- [ ] **Step 4: Update the renamed-column references in supervisor.py**
+- [ ] **Step 5: Update the renamed-column references in supervisor.py**
 
-In `src/skep/supervisor.py`, `run_events` references the old field name. Change both:
+In `src/skep/supervisor.py` `run_events`, change both writes and the read of the renamed field:
 
 ```python
                 if ev.kind == "system" and ev.session_id:
@@ -221,16 +237,16 @@ In `src/skep/supervisor.py`, `run_events` references the old field name. Change 
 
 (`ev.session_id` is the Claude stream `Event.session_id` from `stream.py` — unrelated to the column; it stays.)
 
-- [ ] **Step 5: Update existing test_db references**
+- [ ] **Step 6: Update existing test_db references**
 
-In `tests/test_db.py`, any test that passes `session_id=` to `update` or reads `task.session_id` must use `resume_token`. For example `test_update_fields` (existing) — change `reg.update(tid, status="running", pid=999, session_id="sess-1", topic_id=7)` to `resume_token="sess-1"` and assert `task.resume_token == "sess-1"`.
+In `tests/test_db.py`, any test passing `session_id=` to `update` or reading `task.session_id` must use `resume_token`. E.g. existing `test_update_fields`: `reg.update(tid, status="running", pid=999, session_id="sess-1", topic_id=7)` → `resume_token="sess-1"`, and assert `task.resume_token == "sess-1"`.
 
-- [ ] **Step 6: Run the DB suite**
+- [ ] **Step 7: Run the DB suite**
 
 Run: `uv run pytest tests/test_db.py -v`
 Expected: PASS (migration test + all existing, updated tests).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/skep/db.py src/skep/supervisor.py tests/test_db.py
@@ -330,7 +346,7 @@ git commit -m "feat(db): invocation grouping queries (list/latest by session)"
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/test_agent.py`:
+Add to `tests/test_agent.py` (ensure `from pathlib import Path` is imported):
 
 ```python
 def test_argv_renders_add_dir_model_resume(tmp_path):
@@ -344,8 +360,6 @@ def test_argv_renders_add_dir_model_resume(tmp_path):
     )
     argv = agent._argv()
     assert argv[:2] == ["claude", "-p"]
-    assert "--add-dir" in argv
-    # Each extra root gets its own --add-dir flag.
     assert argv.count("--add-dir") == 2
     assert "/repos/main" in argv and "/repos/shared" in argv
     assert argv[argv.index("--model") + 1] == "claude-sonnet-5"
@@ -359,8 +373,6 @@ def test_argv_omits_new_flags_by_default(tmp_path):
     assert "--model" not in argv
     assert "--resume" not in argv
 ```
-
-Ensure `from pathlib import Path` is imported in the test module (it likely is; add if not).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -439,7 +451,7 @@ git commit -m "feat(agent): render --add-dir, --model, --resume in argv"
   - `Root(name: str, path: Path, mode: str = "new", access: str = "rw", attach_ref: str | None = None)` — frozen dataclass.
   - Mode constants `MODE_NEW = "new"`, `MODE_ATTACH = "attach"`, `MODE_PRIMARY = "primary"`; access constants `ACCESS_RW = "rw"`, `ACCESS_RO = "ro"`.
   - `Workspace(roots: list[Root])` — frozen dataclass; `__post_init__` raises `ValueError` if `roots` is empty.
-  - `Workspace.primary_path -> Path` — `roots[0].path` (the eventual `cwd`; for a `new` root the caller substitutes the created worktree — see Task 5).
+  - `Workspace.primary_path -> Path` — `roots[0].path`.
   - `Workspace.add_dir_paths -> list[Path]` — `[r.path for r in roots[1:]]`.
   - `Workspace.requires_lease -> bool` — `True` iff any root is `primary` + `rw`.
   - `Workspace.single(name: str, path: Path) -> Workspace` — classmethod building today's one-root `new`/`rw` default.
@@ -453,13 +465,7 @@ from pathlib import Path
 
 import pytest
 
-from skep.workspace import (
-    ACCESS_RO,
-    MODE_NEW,
-    MODE_PRIMARY,
-    Root,
-    Workspace,
-)
+from skep.workspace import ACCESS_RO, MODE_NEW, MODE_PRIMARY, Root, Workspace
 
 
 def test_single_root_default_is_new_rw():
@@ -480,8 +486,7 @@ def test_multi_root_renders_cwd_and_add_dirs():
     )
     assert ws.primary_path == Path("/wt/nix-1")
     assert ws.add_dir_paths == [Path("/repos/main")]
-    # primary:ro needs no lease.
-    assert ws.requires_lease is False
+    assert ws.requires_lease is False       # primary:ro needs no lease
 
 
 def test_primary_rw_requires_lease():
@@ -526,7 +531,7 @@ class Root:
     - attach: join an existing (shared) worktree at `path`; `attach_ref` names it.
     - primary: operate in the repo's main checkout at `path`.
 
-    `access` is orthogonal: rw may write, ro is read-only (advisory in A1 —
+    `access` is orthogonal: rw may write, ro is read-only (advisory in A1 --
     real enforcement is Phase 4). A1 never resolves names: `path` is already
     a concrete local path (C's job, upstream).
     """
@@ -562,7 +567,7 @@ class Workspace:
     @property
     def requires_lease(self) -> bool:
         # An exclusive queen-held lease is needed exactly when a non-owned root
-        # is opened rw — i.e. primary:rw (spec §6). Enforcement is A2; A1 only
+        # is opened rw -- i.e. primary:rw (spec §6). Enforcement is A2; A1 only
         # reports the requirement.
         return any(
             r.mode == MODE_PRIMARY and r.access == ACCESS_RW for r in self.roots
@@ -583,49 +588,387 @@ git commit -m "feat(workspace): Root/Workspace value types with lease predicate"
 
 ---
 
-## Task 5: Supervisor.spawn_workspace (multi-root, model, session_local_id)
+## Task 5: task_started carries session_local_id (optional; the A1→A2 interface)
+
+**Files:**
+- Modify: `src/skep/wire.py`
+- Modify: `src/skep/transport.py`
+- Modify: `src/skep/ws_transport.py`
+- Test: `tests/test_transport.py`, `tests/test_ws_transport.py`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces (all with `session_local_id: int | None = None` — **optional**, so today's 3-arg callers keep working and this task lands green on its own):
+  - `wire.task_started_msg(local_id, repo, title, session_local_id=None) -> dict` — includes the field (value may be `None` until Task 7 emits it).
+  - `EventSink.task_started(self, local_id, repo, title, session_local_id=None) -> None` — protocol + `InMemoryEventSink`, `SwitchableEventSink`, `WsEventSink`.
+  - The queen (`QueenWsServer._dispatch`, `on_task_started`, register-replay) is intentionally **not** changed — it keeps reading `local_id`/`repo`/`title` and ignores `session_local_id` until A2. The field rides the wire unused.
+
+Why optional: the sink signature must accept the 4th arg before any producer passes it, but the *current* `Supervisor.spawn` (rewritten only in Task 7) still calls the 3-arg form. A default of `None` lets both coexist, so this task and Tasks 6 keep the suite green even though the real emit arrives in Task 7.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `tests/test_ws_transport.py`:
+
+```python
+def test_task_started_msg_includes_session_local_id():
+    msg = wire.task_started_msg(7, "nix", "t", 3)
+    assert msg["local_id"] == 7
+    assert msg["session_local_id"] == 3
+
+
+def test_task_started_msg_defaults_session_local_id_none():
+    msg = wire.task_started_msg(7, "nix", "t")
+    assert msg["session_local_id"] is None
+```
+
+Add to `tests/test_transport.py` (adapt to the file's existing recording-inbox pattern):
+
+```python
+@pytest.mark.asyncio
+async def test_in_memory_sink_accepts_session_local_id():
+    recorded = {}
+
+    class RecordingInbox:
+        async def on_task_started(self, host, profile, local_id, repo, title):
+            recorded.update(local_id=local_id, repo=repo, title=title)
+
+    sink = InMemoryEventSink(RecordingInbox(), "h1", "default")
+    await sink.task_started(7, "nix", "t", 7)   # 4-arg is the new contract
+    await sink.task_started(8, "nix", "t")       # 3-arg still valid (optional)
+    assert recorded["local_id"] == 8
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_ws_transport.py::test_task_started_msg_includes_session_local_id tests/test_transport.py::test_in_memory_sink_accepts_session_local_id -v`
+Expected: FAIL — `task_started_msg()` / `task_started()` take too few arguments.
+
+- [ ] **Step 3: Implement wire.py**
+
+```python
+def task_started_msg(
+    local_id: int, repo: str, title: str, session_local_id: int | None = None
+) -> dict[str, Any]:
+    return {
+        "t": TASK_STARTED,
+        "local_id": local_id,
+        "repo": repo,
+        "title": title,
+        "session_local_id": session_local_id,
+    }
+```
+
+- [ ] **Step 4: Implement transport.py (protocol + 3 sinks)**
+
+`EventSink` protocol:
+
+```python
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None: ...
+```
+
+`InMemoryEventSink.task_started` — accept and drop `session_local_id` (the combined/in-memory queen path threads it in A2; today `QueenInbox.on_task_started` has no such field):
+
+```python
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None:
+        # session_local_id is A2's; the in-memory queen ignores it for now.
+        await self._inbox.on_task_started(
+            self._host, self._profile, local_id, repo, title
+        )
+```
+
+`SwitchableEventSink.task_started` — forward all four:
+
+```python
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None:
+        if self.target is not None:
+            await self.target.task_started(local_id, repo, title, session_local_id)
+```
+
+- [ ] **Step 5: Implement ws_transport.py (WsEventSink)**
+
+```python
+    async def task_started(
+        self, local_id: int, repo: str, title: str, session_local_id: int | None = None
+    ) -> None:
+        await self._send(
+            wire.task_started_msg(local_id, repo, title, session_local_id)
+        )
+```
+
+The queen's `_dispatch`/`on_task_started` and the register-replay loop stay as they are — they read `msg["local_id"]`, `msg["repo"]`, `msg["title"]` and ignore the extra field. Do **not** change `QueenInbox`, `_active_payload`, or the replay in this task; that is A2's to consume.
+
+- [ ] **Step 6: Run the transport suites**
+
+Run: `uv run pytest tests/test_transport.py tests/test_ws_transport.py -v`
+Expected: PASS. If any existing test stub implements `EventSink` with a 3-arg `task_started`, it still satisfies the protocol at call time (callers pass ≤4 positional args); no change needed unless a test asserts the exact signature.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/skep/wire.py src/skep/transport.py src/skep/ws_transport.py tests/test_transport.py tests/test_ws_transport.py
+git commit -m "feat(transport): task_started carries optional session_local_id (A1->A2 interface)"
+```
+
+---
+
+## Task 6: Multi-root memory (project-targeted write, unioned read)
+
+**Files:**
+- Modify: `src/skep/memory.py`
+- Modify: `src/skep/worker/memory_shim.py`
+- Modify: `src/skep/supervisor.py` (patch the *current* `spawn`'s two memory call sites — sole production caller)
+- Test: `tests/test_memory.py`, `tests/test_memory_write.py`, `tests/worker/test_memory_shim.py`, `tests/test_supervisor_memory.py`, `tests/test_agent_memory.py`
+
+**Interfaces:**
+- Consumes: nothing (leaf change; lands before the spawn rewrite).
+- Produces:
+  - `memory.write_memory(root_paths: dict[str, Path], project: str | None, title, body, kind="gotcha", supersedes=None, now=None) -> Path` — writes into the named project's `.agent-memory/`, defaulting to the first root. **First parameter changes** from a single `repo_path: Path` to `root_paths: dict[str, Path]` + a `project` selector. `now` keeps its existing type `Callable[[], datetime] | None`.
+  - `memory.MemoryStore.addendum_for(root_paths: list[Path]) -> str | None` — unions facts across all roots. **Signature changes** from a single `repo_path` to a list.
+  - `memory.MemoryProbe.addendum_for(root_paths: list[Path]) -> str | None` — the protocol matches (so `Supervisor`'s injected probe and every test fake update together).
+  - `memory_shim.memory_shim_server(roots: list[tuple[str, Path]]) -> dict[str, object]` — passes `name=path` pairs to the shim child.
+  - `memory_shim.build_remember(root_paths: dict[str, Path])`; `remember(title, body, kind="gotcha", supersedes=None, project: str | None = None) -> str` — `project` selects the target root by name; default is the first root.
+
+- [ ] **Step 1: Confirm the sole production caller**
+
+Run: `grep -rn "memory_shim_server\|addendum_for" src/`
+Expected: definitions in `memory.py`/`memory_shim.py`, and exactly one production call site of each in `src/skep/supervisor.py` (`Supervisor.spawn`). If a second production caller exists, it joins this task's patch set.
+
+- [ ] **Step 2: Write the failing tests**
+
+Add to `tests/test_memory.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_addendum_unions_roots(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    (a / ".agent-memory").mkdir(parents=True)
+    (b / ".agent-memory").mkdir(parents=True)
+    write_memory({"a": a}, "a", "fact in A", "body a", "gotcha")
+    write_memory({"b": b}, "b", "fact in B", "body b", "gotcha")
+
+    store = MemoryStore()
+    addendum = await store.addendum_for([a, b])
+    assert "fact in A" in addendum
+    assert "fact in B" in addendum
+
+
+def test_write_memory_targets_named_project(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    (a / ".agent-memory").mkdir(parents=True)
+    (b / ".agent-memory").mkdir(parents=True)
+    roots = {"a": a, "b": b}
+    p_default = write_memory(roots, None, "goes to first", "x", "gotcha")
+    p_named = write_memory(roots, "b", "goes to b", "y", "gotcha")
+    assert (a / ".agent-memory") in p_default.parents
+    assert (b / ".agent-memory") in p_named.parents
+
+
+def test_write_memory_unknown_project_raises(tmp_path):
+    a = tmp_path / "a"
+    (a / ".agent-memory").mkdir(parents=True)
+    with pytest.raises(ValueError):
+        write_memory({"a": a}, "nope", "t", "b", "gotcha")
+```
+
+Add to `tests/worker/test_memory_shim.py`:
+
+```python
+def test_remember_writes_to_named_project(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    (a / ".agent-memory").mkdir(parents=True)
+    (b / ".agent-memory").mkdir(parents=True)
+    remember = build_remember({"a": a, "b": b})
+    path = remember("title", "body", project="b")
+    assert str(b / ".agent-memory") in path
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_memory.py::test_addendum_unions_roots tests/worker/test_memory_shim.py::test_remember_writes_to_named_project -v`
+Expected: FAIL — `write_memory` / `addendum_for` / `build_remember` reject the new argument shapes.
+
+- [ ] **Step 4: Implement memory.py**
+
+Change `write_memory`'s first parameter to a `dict[str, Path]` + `project` selector, resolve the target repo path, then run the **existing body verbatim** (it already operates on a local `repo_path` variable — slug/containment/supersedes logic is unchanged). Only the first few lines are new:
+
+```python
+def write_memory(
+    root_paths: dict[str, Path],
+    project: str | None,
+    title: str,
+    body: str,
+    kind: str = "gotcha",
+    supersedes: str | None = None,
+    now: Callable[[], datetime] | None = None,
+) -> Path:
+    if project is None:
+        # Default target is the first root (insertion-ordered dict).
+        repo_path = next(iter(root_paths.values()))
+    elif project in root_paths:
+        repo_path = root_paths[project]
+    else:
+        raise ValueError(f"unknown project: {project!r} (have {list(root_paths)})")
+    # ---- everything below is the existing body, unchanged ----
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind: {kind!r}")
+    clock = now or _utcnow
+    root = memory_dir(repo_path)
+    # ... rest of the existing write_memory body ...
+```
+
+(`Callable` and `datetime` are already imported in `memory.py`.) Change `MemoryStore.addendum_for` to accept a list of roots and union their facts. `_load` already filters superseded facts and sorts within a root; the union must re-sort so cross-root ordering by `created` holds:
+
+```python
+    async def addendum_for(self, root_paths: list[Path]) -> str | None:
+        facts: list[MemoryFact] = []
+        for repo_path in root_paths:
+            facts.extend(self._load(repo_path))
+        # _load sorts within a root; re-sort the union so newest-first holds
+        # across roots too.
+        facts.sort(key=lambda f: f.created, reverse=True)
+        return self.render(facts)
+```
+
+Update the `MemoryProbe` protocol at the bottom of the file to match:
+
+```python
+class MemoryProbe(Protocol):
+    """What Supervisor needs from memory: an addendum, or None."""
+
+    async def addendum_for(self, root_paths: list[Path]) -> str | None: ...
+```
+
+No dedupe across roots: facts from different repos are genuinely distinct even if two slugs coincide. Keep the `render` byte-budget unchanged.
+
+- [ ] **Step 5: Implement memory_shim.py**
+
+```python
+def memory_shim_server(roots: list[tuple[str, Path]]) -> dict[str, object]:
+    """The `--mcp-config` entry; each root passed as name=path (name has no '=')."""
+    args = ["-m", "skep.worker.memory_shim"]
+    args += [f"{name}={path}" for name, path in roots]
+    return {"type": "stdio", "command": sys.executable, "args": args}
+
+
+def build_remember(root_paths: dict[str, Path]) -> Callable[..., str]:
+    def remember(
+        title: str,
+        body: str,
+        kind: str = "gotcha",
+        supersedes: str | None = None,
+        project: str | None = None,
+    ) -> str:
+        """Record a durable fact about a project in this workspace for future agents.
+
+        project: which workspace root to write to (by name); defaults to the
+        primary root. kind: one of gotcha, constraint, decision, convention,
+        incident. Returns the path of the written memory file.
+        """
+        return str(write_memory(root_paths, project, title, body, kind, supersedes))
+
+    return remember
+
+
+def build_server(root_paths: dict[str, Path]) -> FastMCP:
+    server = FastMCP("memory")
+    server.tool()(build_remember(root_paths))
+    return server
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: python -m skep.worker.memory_shim <name>=<path> ...")
+    roots: dict[str, Path] = {}
+    for arg in sys.argv[1:]:
+        name, _, path = arg.partition("=")
+        roots[name] = Path(path)
+    build_server(roots).run(transport="stdio")
+```
+
+- [ ] **Step 6: Patch the current spawn's memory call sites**
+
+In `src/skep/supervisor.py` `spawn` (still the single-root version at this point), update the two memory calls to the new shapes. `repo` and `repo_path` are the existing locals (`repo_path = self._cfg.repos_root / repo`):
+
+```python
+                    try:
+                        addendum = await self._memory.addendum_for([repo_path])
+                    except Exception as exc:
+                        self._reg.log_audit(tid, "error", f"memory read failed: {exc}")
+                        addendum = None
+                    if addendum is not None:
+                        agent_kwargs["append_system_prompt"] = addendum
+                mcp_servers["memory"] = memory_shim_server([(repo, repo_path)])
+```
+
+(Task 7 replaces this whole block with the multi-root `spawn_workspace` version.)
+
+- [ ] **Step 7: Migrate the existing memory tests**
+
+- `tests/test_memory.py`, `tests/test_memory_write.py`: `write_memory(repo, title, ...)` → `write_memory({"repo": repo}, None, title, ...)`; `addendum_for(repo)` → `addendum_for([repo])`.
+- `tests/worker/test_memory_shim.py`: `build_remember(repo)` → `build_remember({"repo": repo})`; `memory_shim_server(repo)` → `memory_shim_server([("repo", repo)])`.
+- `tests/test_supervisor_memory.py`, `tests/test_agent_memory.py`: update any fake `MemoryProbe.addendum_for` to take a list, and any `memory_shim_server` expectation to the list-of-pairs shape.
+
+- [ ] **Step 8: Run the memory + supervisor suites**
+
+Run: `uv run pytest tests/test_memory.py tests/test_memory_write.py tests/worker/test_memory_shim.py tests/test_supervisor_memory.py tests/test_agent_memory.py tests/test_supervisor.py -v`
+Expected: PASS.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/skep/memory.py src/skep/worker/memory_shim.py src/skep/supervisor.py tests/test_memory.py tests/test_memory_write.py tests/worker/test_memory_shim.py tests/test_supervisor_memory.py tests/test_agent_memory.py
+git commit -m "feat(memory): multi-root workspace — project-targeted write, unioned read"
+```
+
+---
+
+## Task 7: Supervisor.spawn_workspace (multi-root, model, session_local_id)
 
 **Files:**
 - Modify: `src/skep/supervisor.py`
 - Test: `tests/test_supervisor.py`
 
 **Interfaces:**
-- Consumes: `Workspace`/`Root` (Task 4); `AgentProcess` add_dirs/model params (Task 3); `session_local_id` column (Task 1).
+- Consumes: `Workspace`/`Root` (Task 4); `AgentProcess` add_dirs/model params (Task 3); `session_local_id` column (Task 1); the optional `task_started` 4th arg (Task 5); the multi-root memory shapes (Task 6).
 - Produces:
   - `Supervisor.spawn(self, repo: str, task: str) -> int` — unchanged signature (protocol/wire compatibility); now a thin wrapper that builds `Workspace.single(repo, repos_root/repo)` and calls `spawn_workspace`.
-  - `Supervisor.spawn_workspace(self, workspace: Workspace, task: str, *, model: str | None = None) -> int` — the engine. Prepares each root (creates a worktree only for a `new` root[0]; uses `path` as-is for `attach`/`primary`), inserts an invocation with `session_local_id = tid` (first invocation of a new session), renders `cwd` + `--add-dir` + `--model`, spawns.
+  - `Supervisor.spawn_workspace(self, workspace: Workspace, task: str, *, model: str | None = None) -> int` — the engine. Prepares each root (creates a worktree only for a `new` head root; uses `path` as-is for `attach`/`primary`), inserts an invocation with `session_local_id = tid` (first invocation of a new session), renders `cwd` + `--add-dir` + `--model`, wires multi-root memory, emits `session_local_id` on `task_started`.
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/test_supervisor.py`. Use the existing test's fakes (an `AgentProcess` stub via `agent_factory` and a no-op `worktree_factory`); mirror whatever fixture/stub pattern the file already uses. A representative test:
+Add to `tests/test_supervisor.py`, reusing its existing `FakeAgent` stub / fixtures. Set `memory_enabled=False` on the config for these unit tests so the assertions focus on workspace rendering (Task 6 covers the memory path):
 
 ```python
 @pytest.mark.asyncio
 async def test_spawn_workspace_renders_multi_root_and_sets_session_local_id(
-    worker_config, fake_sink
+    worker_config_no_memory, fake_sink
 ):
     created = {}
 
     def fake_agent(**kwargs):
         created.update(kwargs)
-        return FakeAgent()  # existing stub in this test module
+        return FakeAgent()
 
     reg = Registry.open(":memory:")
     sup = Supervisor(
-        worker_config,
-        reg,
-        fake_sink,
-        agent_factory=fake_agent,
-        worktree_factory=lambda *a: None,
+        worker_config_no_memory, reg, fake_sink,
+        agent_factory=fake_agent, worktree_factory=lambda *a: None,
     )
     ws = Workspace(
         roots=[
-            Root("nix", worker_config.repos_root / "nix", mode=MODE_NEW),
+            Root("nix", worker_config_no_memory.repos_root / "nix", mode=MODE_NEW),
             Root(
-                "main",
-                worker_config.repos_root / "main",
-                mode=MODE_PRIMARY,
-                access=ACCESS_RO,
+                "main", worker_config_no_memory.repos_root / "main",
+                mode=MODE_PRIMARY, access=ACCESS_RO,
             ),
         ]
     )
@@ -634,14 +977,12 @@ async def test_spawn_workspace_renders_multi_root_and_sets_session_local_id(
     task = reg.get_task(tid)
     assert task.session_local_id == tid          # first invocation keys to itself
     assert task.model == "claude-sonnet-5"
-    # cwd is the created worktree for the new root[0]; the primary root is an add-dir.
-    assert created["add_dirs"] == [worker_config.repos_root / "main"]
+    assert created["add_dirs"] == [worker_config_no_memory.repos_root / "main"]
     assert created["model"] == "claude-sonnet-5"
 
 
 @pytest.mark.asyncio
-async def test_spawn_is_single_root_workspace(worker_config, fake_sink):
-    # The legacy entrypoint still works and produces one new/rw root.
+async def test_spawn_is_single_root_workspace(worker_config_no_memory, fake_sink):
     reg = Registry.open(":memory:")
     created = {}
 
@@ -650,7 +991,7 @@ async def test_spawn_is_single_root_workspace(worker_config, fake_sink):
         return FakeAgent()
 
     sup = Supervisor(
-        worker_config, reg, fake_sink,
+        worker_config_no_memory, reg, fake_sink,
         agent_factory=fake_agent, worktree_factory=lambda *a: None,
     )
     tid = await sup.spawn("nix", "t")
@@ -660,7 +1001,7 @@ async def test_spawn_is_single_root_workspace(worker_config, fake_sink):
     assert created.get("add_dirs") in (None, [])
 ```
 
-Adapt fixture names (`worker_config`, `fake_sink`, `FakeAgent`) to the actual ones in `tests/test_supervisor.py`; add imports `from skep.workspace import Workspace, Root, MODE_NEW, MODE_PRIMARY, ACCESS_RO` and `from skep.db import Registry`.
+Adapt fixture names to the file's actual ones (add a `worker_config_no_memory` fixture, or set `memory_enabled=False` on the existing config fixture inline). Add imports `from skep.workspace import Workspace, Root, MODE_NEW, MODE_PRIMARY, ACCESS_RO` and `from skep.db import Registry`. `fake_sink`'s `task_started` must accept the 4th arg — it does after Task 5 (optional param on the protocol); if `fake_sink` is a bespoke stub, give its `task_started` the `session_local_id=None` param.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -669,13 +1010,13 @@ Expected: FAIL — `AttributeError: 'Supervisor' object has no attribute 'spawn_
 
 - [ ] **Step 3: Implement**
 
-In `src/skep/supervisor.py`, add the import at the top:
+In `src/skep/supervisor.py`, add the import:
 
 ```python
 from skep.workspace import MODE_NEW, Workspace
 ```
 
-Replace the existing `spawn` method with a wrapper plus the new engine. The engine keeps the existing try/except teardown structure verbatim — only the pre-spawn setup (worktree, invocation row, agent kwargs) changes:
+Replace the existing `spawn` method with a wrapper plus the new engine. The engine keeps the existing try/except teardown structure verbatim — only the pre-spawn setup (worktree, invocation row, agent kwargs, memory roots) changes:
 
 ```python
     async def spawn(self, repo: str, task: str) -> int:
@@ -694,9 +1035,8 @@ Replace the existing `spawn` method with a wrapper plus the new engine. The engi
         # First invocation of a new session keys to its own id (see plan preamble).
         self._reg.update(tid, session_local_id=tid, model=model)
 
-        # Resolve each root to a concrete on-disk path; create a worktree only
-        # for a `new` head root (today's behavior). attach/primary roots are
-        # used as-is (their path is already the shared/main checkout).
+        # Create a worktree only for a `new` head root (today's behavior);
+        # attach/primary roots use their path as-is.
         if head.mode == MODE_NEW:
             branch = f"skep/{_slug(task)}-{tid}"
             head_path = self._cfg.worktrees_root / f"{head.name}-{tid}"
@@ -789,14 +1129,12 @@ Replace the existing `spawn` method with a wrapper plus the new engine. The engi
         return tid
 ```
 
-Notes for the implementer:
-- `self._sink.task_started(tid, head.name, task, tid)` — the 4th arg is `session_local_id`, equal to `tid` for a first invocation. The `EventSink` signature gains this parameter in Task 8; **this line will not type-check / run until Task 8 lands**, so if you run the supervisor suite between Task 5 and Task 8, expect a `TypeError` on that call. Either implement Task 8 before running the full supervisor suite, or temporarily assert only through `spawn_workspace`'s return + registry state with a sink stub that already accepts 4 args (the `fake_sink` in the test above should accept `session_local_id`).
-- `memory_shim_server(roots)` and `addendum_for([paths])` change signature in Task 7; the same ordering caveat applies. To keep this task independently runnable, the test above uses `agent_factory`/`worktree_factory` stubs and can run with `memory_enabled=False` (set it in `worker_config`) so the memory calls are skipped. Prefer that for Task 5's own test; Task 7 covers the memory path.
+Note: `self._sink.task_started(tid, head.name, task, tid)` — the 4th arg is `session_local_id`, equal to `tid` for a first invocation. For a `new` head root, `head.path` is the parent repo (`repos_root/name`); the created worktree is `head_path`. Memory targets the parent repo (existing invariant), so `roots` carries `r.path` (parent repos), not the worktree — correct.
 
 - [ ] **Step 4: Run the supervisor suite**
 
 Run: `uv run pytest tests/test_supervisor.py -v`
-Expected: PASS. If `fake_sink` in existing tests does not yet accept the 4th `task_started` arg, update that stub now (it is the same change Task 8 formalizes) or run Task 8 first.
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -807,16 +1145,16 @@ git commit -m "feat(supervisor): workspace-aware spawn with model and session_lo
 
 ---
 
-## Task 6: Supervisor.resume (new invocation, same worktree)
+## Task 8: Supervisor.resume (new invocation, same worktree)
 
 **Files:**
 - Modify: `src/skep/supervisor.py`
 - Create: `tests/test_supervisor_resume.py`
 
 **Interfaces:**
-- Consumes: `Registry.latest_invocation` (Task 2); `AgentProcess.resume_token`/`model` (Task 3); `spawn_workspace` internals (Task 5).
+- Consumes: `Registry.latest_invocation` (Task 2); `AgentProcess.resume_token`/`model` (Task 3); the `task_started` optional arg (Task 5).
 - Produces:
-  - `Supervisor.resume(self, session_local_id: int, *, model: str | None = None) -> int` — finds the session's latest invocation, reuses its `worktree_path`, inserts a new invocation row (`session_local_id` = the same session), spawns an `AgentProcess` with `resume_token` and optional `model`. Raises `ValueError` if the session is unknown or has no `resume_token` to resume from. Returns the new invocation's task id.
+  - `Supervisor.resume(self, session_local_id: int, *, model: str | None = None) -> int` — finds the session's latest invocation, reuses its `worktree_path`, inserts a new invocation row (`session_local_id` = the same session), spawns an `AgentProcess` with `resume_token` and optional `model`. Raises `ValueError` if the session is unknown or has no `resume_token`. Returns the new invocation's task id.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -827,26 +1165,27 @@ import pytest
 
 from skep.db import Registry
 from skep.supervisor import Supervisor
+# import FakeAgent from the shared location (see Step 3 note)
 
 
 @pytest.mark.asyncio
-async def test_resume_starts_new_invocation_same_worktree(worker_config, fake_sink):
+async def test_resume_starts_new_invocation_same_worktree(
+    worker_config_no_memory, fake_sink
+):
     created = {}
 
     def fake_agent(**kwargs):
         created.update(kwargs)
-        return FakeAgent()  # reuse the stub from tests/test_supervisor.py
+        return FakeAgent()
 
     reg = Registry.open(":memory:")
-    # Seed a finished first invocation with a harvested resume_token.
     first = reg.add_task("nix", "t", "/wt/nix-1")
     reg.update(first, session_local_id=first, resume_token="tok-1", status="done")
 
     sup = Supervisor(
-        worker_config, reg, fake_sink,
+        worker_config_no_memory, reg, fake_sink,
         agent_factory=fake_agent, worktree_factory=lambda *a: None,
     )
-    # worker_config.memory_enabled must be False for this unit test.
     second = await sup.resume(first, model="claude-opus-4-8")
 
     task = reg.get_task(second)
@@ -855,28 +1194,31 @@ async def test_resume_starts_new_invocation_same_worktree(worker_config, fake_si
     assert task.worktree_path == "/wt/nix-1"        # same worktree, no new one
     assert created["resume_token"] == "tok-1"
     assert created["model"] == "claude-opus-4-8"
-    # No worktree was created on resume.
     assert created["cwd"].as_posix().endswith("/wt/nix-1")
 
 
 @pytest.mark.asyncio
-async def test_resume_unknown_session_raises(worker_config, fake_sink):
+async def test_resume_unknown_session_raises(worker_config_no_memory, fake_sink):
     reg = Registry.open(":memory:")
-    sup = Supervisor(worker_config, reg, fake_sink, worktree_factory=lambda *a: None)
+    sup = Supervisor(
+        worker_config_no_memory, reg, fake_sink, worktree_factory=lambda *a: None
+    )
     with pytest.raises(ValueError):
         await sup.resume(12345)
 ```
-
-Import/adapt `FakeAgent`, `worker_config`, `fake_sink` from the shared test fixtures. If `FakeAgent` lives in `tests/test_supervisor.py`, move it to `tests/conftest.py` as a fixture-returning stub during this task, and update `tests/test_supervisor.py`'s import — commit that refactor as part of this task.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_supervisor_resume.py -v`
 Expected: FAIL — `AttributeError: 'Supervisor' object has no attribute 'resume'`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Share the FakeAgent fixture**
 
-Add to `Supervisor` in `src/skep/supervisor.py`:
+If `FakeAgent` currently lives inside `tests/test_supervisor.py`, move it to `tests/conftest.py` (as a plain class or a fixture-returned stub) and import it in both `tests/test_supervisor.py` and `tests/test_supervisor_resume.py`. Commit that refactor as part of this task. Likewise add a shared `worker_config_no_memory` fixture to `conftest.py` if it is not already there.
+
+- [ ] **Step 4: Implement**
+
+Add to `Supervisor` in `src/skep/supervisor.py` (`Path` is already imported):
 
 ```python
     async def resume(
@@ -898,7 +1240,6 @@ Add to `Supervisor` in `src/skep/supervisor.py`:
         self._reg.update(tid, session_local_id=session_local_id, model=model)
 
         agent: AgentProcess | None = None
-        shim: MailboxShim | None = None
         try:
             self._reg.log_audit(tid, "resume", f"resume session {session_local_id}")
             agent_kwargs: dict[str, Any] = dict(
@@ -908,10 +1249,8 @@ Add to `Supervisor` in `src/skep/supervisor.py`:
                 config_dir=self._cfg.claude_config_dir,
                 model=model,
                 resume_token=prev.resume_token,
+                allowed_tools=list(BASE_TOOLS),
             )
-            allowed_tools: list[str] = list(BASE_TOOLS)
-            agent_kwargs["allowed_tools"] = allowed_tools
-
             agent = self._agent_factory(**agent_kwargs)
             await agent.start()
             self._agents[tid] = agent
@@ -923,7 +1262,6 @@ Add to `Supervisor` in `src/skep/supervisor.py`:
             t.add_done_callback(self._tasks.discard)
         except Exception as exc:
             self._agents.pop(tid, None)
-            self._shims.pop(tid, None)
             self._reg.update(tid, status="failed")
             self._reg.log_audit(tid, "error", f"resume failed: {exc}")
             if agent is not None:
@@ -938,16 +1276,19 @@ Add to `Supervisor` in `src/skep/supervisor.py`:
         return tid
 ```
 
-Add `from pathlib import Path` to the imports if not already present (it is — `Supervisor` already imports `Path`).
+v1 resume is intentionally minimal: it carries `resume_token` + `model` + the base coding tools. Re-attaching memory and mailbox on resume is a follow-up — it needs the session's workspace roots stored durably, which A2 supplies. The `task_started` 4th arg here is the *original* `session_local_id`, which is how the queen (A2) recognizes a resume rather than a new session.
 
-Note: v1 resume rehydrates memory/mailbox wiring is intentionally minimal — the resume invocation carries `resume_token` + `model` and the base coding tools; memory and mailbox re-attachment on resume is a follow-up (it needs the same workspace roots stored on the session, which A2 supplies). Keep A1's resume focused on the verified `--resume`/`--model` mechanics. The `task_started` 4th arg here is `session_local_id` (the original), which is how the queen (A2) recognizes this as a resume, not a new session.
-
-- [ ] **Step 4: Run the resume test**
+- [ ] **Step 5: Run the resume test**
 
 Run: `uv run pytest tests/test_supervisor_resume.py -v`
-Expected: PASS (requires Task 8's `task_started` 4-arg sink, or a `fake_sink` stub already accepting it).
+Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Run the whole suite**
+
+Run: `uv run pytest -q`
+Expected: PASS. This is the final gate; every prior task committed green, so nothing should surprise here.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/skep/supervisor.py tests/test_supervisor_resume.py tests/conftest.py tests/test_supervisor.py
@@ -956,355 +1297,33 @@ git commit -m "feat(supervisor): resume a session as a new invocation on the sam
 
 ---
 
-## Task 7: Multi-root memory (project-targeted write, unioned read)
-
-**Files:**
-- Modify: `src/skep/memory.py`
-- Modify: `src/skep/worker/memory_shim.py`
-- Test: `tests/test_memory.py`, `tests/worker/test_memory_shim.py`
-
-**Interfaces:**
-- Consumes: the roots list built in Task 5 (`[(name, path), ...]`).
-- Produces:
-  - `memory.write_memory(root_paths: dict[str, Path], project: str | None, title, body, kind="gotcha", supersedes=None, now=None) -> Path` — writes into the named project's `.agent-memory/`, defaulting to the first root. **First parameter changes** from a single `repo_path: Path` to `root_paths: dict[str, Path]` + a `project` selector. `now` keeps its existing type `Callable[[], datetime] | None`.
-  - `memory.MemoryStore.addendum_for(root_paths: list[Path]) -> str | None` — unions facts across all roots. **Signature changes** from a single `repo_path` to a list.
-  - `memory.MemoryProbe.addendum_for(root_paths: list[Path]) -> str | None` — the protocol matches (so `Supervisor`'s injected `MemoryProbe` and every test fake update together).
-  - `memory_shim.memory_shim_server(roots: list[tuple[str, Path]]) -> dict[str, object]` — passes `name=path` pairs to the shim child.
-  - `memory_shim`'s `remember(title, body, kind="gotcha", supersedes=None, project: str | None = None) -> str` — `project` selects the target root by name; default is the first root.
-
-- [ ] **Step 1: Write the failing tests**
-
-The existing `test_memory.py` / `test_memory_write.py` / `test_memory_shim.py` call `write_memory(repo_path, ...)` and `addendum_for(repo_path)`. First, add the new-behavior tests, then (Step 5) migrate the existing callers.
-
-Add to `tests/test_memory.py`:
-
-```python
-@pytest.mark.asyncio
-async def test_addendum_unions_roots(tmp_path):
-    a = tmp_path / "a"
-    b = tmp_path / "b"
-    (a / ".agent-memory").mkdir(parents=True)
-    (b / ".agent-memory").mkdir(parents=True)
-    write_memory({"a": a}, "a", "fact in A", "body a", "gotcha")
-    write_memory({"b": b}, "b", "fact in B", "body b", "gotcha")
-
-    store = MemoryStore()
-    addendum = await store.addendum_for([a, b])
-    assert "fact in A" in addendum
-    assert "fact in B" in addendum
-
-
-def test_write_memory_targets_named_project(tmp_path):
-    a = tmp_path / "a"
-    b = tmp_path / "b"
-    (a / ".agent-memory").mkdir(parents=True)
-    (b / ".agent-memory").mkdir(parents=True)
-    roots = {"a": a, "b": b}
-    p_default = write_memory(roots, None, "goes to first", "x", "gotcha")
-    p_named = write_memory(roots, "b", "goes to b", "y", "gotcha")
-    assert (a / ".agent-memory") in p_default.parents
-    assert (b / ".agent-memory") in p_named.parents
-
-
-def test_write_memory_unknown_project_raises(tmp_path):
-    a = tmp_path / "a"
-    (a / ".agent-memory").mkdir(parents=True)
-    with pytest.raises(ValueError):
-        write_memory({"a": a}, "nope", "t", "b", "gotcha")
-```
-
-Add to `tests/worker/test_memory_shim.py`:
-
-```python
-def test_remember_writes_to_named_project(tmp_path):
-    a = tmp_path / "a"
-    b = tmp_path / "b"
-    (a / ".agent-memory").mkdir(parents=True)
-    (b / ".agent-memory").mkdir(parents=True)
-    remember = build_remember({"a": a, "b": b})
-    path = remember("title", "body", project="b")
-    assert str(b / ".agent-memory") in path
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `uv run pytest tests/test_memory.py::test_addendum_unions_roots tests/worker/test_memory_shim.py::test_remember_writes_to_named_project -v`
-Expected: FAIL — `write_memory` / `addendum_for` / `build_remember` reject the new argument shapes.
-
-- [ ] **Step 3: Implement memory.py**
-
-In `src/skep/memory.py`, change `write_memory`'s first parameter to a `dict[str, Path]` of project-name → repo path plus a `project` selector, resolve the target repo path from it, then run the **existing body verbatim** (it already operates on a local `repo_path` variable — slug/containment/supersedes logic is unchanged). Only the first few lines are new:
-
-```python
-def write_memory(
-    root_paths: dict[str, Path],
-    project: str | None,
-    title: str,
-    body: str,
-    kind: str = "gotcha",
-    supersedes: str | None = None,
-    now: Callable[[], datetime] | None = None,
-) -> Path:
-    if project is None:
-        # Default target is the first root (insertion-ordered dict).
-        repo_path = next(iter(root_paths.values()))
-    elif project in root_paths:
-        repo_path = root_paths[project]
-    else:
-        raise ValueError(f"unknown project: {project!r} (have {list(root_paths)})")
-    # ---- everything below is the existing body, unchanged ----
-    if kind not in KINDS:
-        raise ValueError(f"unknown kind: {kind!r}")
-    clock = now or _utcnow
-    root = memory_dir(repo_path)
-    # ... rest of the existing write_memory body ...
-```
-
-(`Callable` is already imported in `memory.py`.) Change `MemoryStore.addendum_for` to accept a list of roots and union their facts. `_load` already filters superseded facts and sorts within a root; the union must re-sort so cross-root ordering by `created` holds:
-
-```python
-    async def addendum_for(self, root_paths: list[Path]) -> str | None:
-        facts: list[MemoryFact] = []
-        for repo_path in root_paths:
-            facts.extend(self._load(repo_path))
-        # _load sorts within a root; re-sort the union so newest-first holds
-        # across roots too.
-        facts.sort(key=lambda f: f.created, reverse=True)
-        return self.render(facts)
-```
-
-Update the `MemoryProbe` protocol at the bottom of the file to match:
-
-```python
-class MemoryProbe(Protocol):
-    """What Supervisor needs from memory: an addendum, or None."""
-
-    async def addendum_for(self, root_paths: list[Path]) -> str | None: ...
-```
-
-Keep the byte-budget in `render` unchanged. No dedupe across roots: facts from different repos are genuinely distinct even if two slugs coincide.
-
-- [ ] **Step 4: Implement memory_shim.py**
-
-In `src/skep/worker/memory_shim.py`, change `memory_shim_server` to pass `name=path` pairs, `main()` to parse them into a dict, and `build_remember` to close over the dict and accept `project`:
-
-```python
-def memory_shim_server(roots: list[tuple[str, Path]]) -> dict[str, object]:
-    """The `--mcp-config` entry; each root passed as name=path (name has no '=')."""
-    args = ["-m", "skep.worker.memory_shim"]
-    args += [f"{name}={path}" for name, path in roots]
-    return {"type": "stdio", "command": sys.executable, "args": args}
-
-
-def build_remember(root_paths: dict[str, Path]) -> Callable[..., str]:
-    def remember(
-        title: str,
-        body: str,
-        kind: str = "gotcha",
-        supersedes: str | None = None,
-        project: str | None = None,
-    ) -> str:
-        """Record a durable fact about a project in this workspace for future agents.
-
-        project: which workspace root to write to (by name); defaults to the
-        primary root. kind: one of gotcha, constraint, decision, convention,
-        incident. Returns the path of the written memory file.
-        """
-        return str(write_memory(root_paths, project, title, body, kind, supersedes))
-
-    return remember
-
-
-def build_server(root_paths: dict[str, Path]) -> FastMCP:
-    server = FastMCP("memory")
-    server.tool()(build_remember(root_paths))
-    return server
-
-
-def main() -> None:
-    if len(sys.argv) < 2:
-        raise SystemExit("usage: python -m skep.worker.memory_shim <name>=<path> ...")
-    roots: dict[str, Path] = {}
-    for arg in sys.argv[1:]:
-        name, _, path = arg.partition("=")
-        roots[name] = Path(path)
-    build_server(roots).run(transport="stdio")
-```
-
-- [ ] **Step 5: Migrate the existing memory callers and tests**
-
-- `tests/test_memory.py`, `tests/test_memory_write.py`: existing calls `write_memory(repo, title, ...)` → `write_memory({"repo": repo}, None, title, ...)`; `addendum_for(repo)` → `addendum_for([repo])`.
-- `tests/worker/test_memory_shim.py`: `build_remember(repo)` → `build_remember({"repo": repo})`; `memory_shim_server(repo)` → `memory_shim_server([("repo", repo)])`.
-- `tests/test_supervisor_memory.py` and `tests/test_agent_memory.py`: update any direct `addendum_for` / `memory_shim_server` expectations to the new shapes.
-- No production caller besides `Supervisor.spawn_workspace` (already updated in Task 5) uses these.
-
-- [ ] **Step 6: Run the memory suites**
-
-Run: `uv run pytest tests/test_memory.py tests/test_memory_write.py tests/worker/test_memory_shim.py tests/test_supervisor_memory.py tests/test_agent_memory.py -v`
-Expected: PASS.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add src/skep/memory.py src/skep/worker/memory_shim.py tests/test_memory.py tests/test_memory_write.py tests/worker/test_memory_shim.py tests/test_supervisor_memory.py tests/test_agent_memory.py
-git commit -m "feat(memory): multi-root workspace — project-targeted write, unioned read"
-```
-
----
-
-## Task 8: task_started carries session_local_id (the A1→A2 interface)
-
-**Files:**
-- Modify: `src/skep/wire.py`
-- Modify: `src/skep/transport.py`
-- Modify: `src/skep/ws_transport.py`
-- Test: `tests/test_transport.py`, `tests/test_ws_transport.py`
-
-**Interfaces:**
-- Consumes: `Supervisor` emits the 4th arg (Task 5/6).
-- Produces:
-  - `wire.task_started_msg(local_id: int, repo: str, title: str, session_local_id: int) -> dict`.
-  - `EventSink.task_started(self, local_id: int, repo: str, title: str, session_local_id: int) -> None` — protocol + `InMemoryEventSink`, `SwitchableEventSink`, `WsEventSink`.
-  - The queen (`QueenWsServer._dispatch`, `on_task_started`, register-replay) is intentionally **not** changed — it keeps reading `local_id`/`repo`/`title` and ignores `session_local_id` until A2. The field rides the wire unused.
-
-- [ ] **Step 1: Write the failing test**
-
-Add to `tests/test_transport.py` (adapt to the file's existing recording-sink pattern):
-
-```python
-@pytest.mark.asyncio
-async def test_task_started_carries_session_local_id():
-    recorded = {}
-
-    class RecordingInbox:
-        async def on_task_started(self, host, profile, local_id, repo, title):
-            recorded.update(
-                host=host, profile=profile, local_id=local_id, repo=repo, title=title
-            )
-        # other QueenInbox methods can be no-ops / omitted if the sink only calls this
-
-    sink = InMemoryEventSink(RecordingInbox(), "h1", "default")
-    # 4-arg call is the new contract; the in-memory queen path drops the field.
-    await sink.task_started(7, "nix", "t", 7)
-    assert recorded["local_id"] == 7
-```
-
-Add to `tests/test_ws_transport.py` a check that the wire frame includes the field:
-
-```python
-def test_task_started_msg_includes_session_local_id():
-    msg = wire.task_started_msg(7, "nix", "t", 3)
-    assert msg["local_id"] == 7
-    assert msg["session_local_id"] == 3
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `uv run pytest tests/test_ws_transport.py::test_task_started_msg_includes_session_local_id tests/test_transport.py::test_task_started_carries_session_local_id -v`
-Expected: FAIL — `task_started_msg()` / `task_started()` take too few arguments.
-
-- [ ] **Step 3: Implement wire.py**
-
-```python
-def task_started_msg(
-    local_id: int, repo: str, title: str, session_local_id: int
-) -> dict[str, Any]:
-    return {
-        "t": TASK_STARTED,
-        "local_id": local_id,
-        "repo": repo,
-        "title": title,
-        "session_local_id": session_local_id,
-    }
-```
-
-- [ ] **Step 4: Implement transport.py (protocol + 3 sinks)**
-
-`EventSink` protocol:
-
-```python
-    async def task_started(
-        self, local_id: int, repo: str, title: str, session_local_id: int
-    ) -> None: ...
-```
-
-`InMemoryEventSink.task_started` — accept and drop `session_local_id` (the combined/in-memory queen path threads it in A2; today `QueenInbox.on_task_started` has no such field):
-
-```python
-    async def task_started(
-        self, local_id: int, repo: str, title: str, session_local_id: int
-    ) -> None:
-        # session_local_id is A2's; the in-memory queen ignores it for now.
-        await self._inbox.on_task_started(
-            self._host, self._profile, local_id, repo, title
-        )
-```
-
-`SwitchableEventSink.task_started` — forward all four:
-
-```python
-    async def task_started(
-        self, local_id: int, repo: str, title: str, session_local_id: int
-    ) -> None:
-        if self.target is not None:
-            await self.target.task_started(local_id, repo, title, session_local_id)
-```
-
-- [ ] **Step 5: Implement ws_transport.py (WsEventSink)**
-
-```python
-    async def task_started(
-        self, local_id: int, repo: str, title: str, session_local_id: int
-    ) -> None:
-        await self._send(
-            wire.task_started_msg(local_id, repo, title, session_local_id)
-        )
-```
-
-The queen's `_dispatch`/`on_task_started` and the register-replay loop stay as they are — they read `msg["local_id"]`, `msg["repo"]`, `msg["title"]` and ignore the extra field. Do **not** change `QueenInbox`, `_active_payload`, or the replay in this task; that is A2's to consume.
-
-- [ ] **Step 6: Run the transport suites and the full test run**
-
-Run: `uv run pytest tests/test_transport.py tests/test_ws_transport.py -v`
-Expected: PASS.
-
-Then the whole suite (all prior tasks converge here — this is where the supervisor's 4-arg `task_started` call becomes valid):
-
-Run: `uv run pytest -q`
-Expected: PASS. Fix any remaining test stub that constructs an `EventSink` and still defines a 3-arg `task_started` (update it to 4 args).
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add src/skep/wire.py src/skep/transport.py src/skep/ws_transport.py tests/test_transport.py tests/test_ws_transport.py
-git commit -m "feat(transport): task_started carries session_local_id (A1->A2 interface)"
-```
-
----
-
 ## Self-Review
 
 **Spec coverage (against `docs/superpowers/specs/2026-07-10-sessions-design.md`):**
-- §2 Invocation (resume_token + model per run) → Tasks 1, 2, 3, 6. ✅
+- §2 Invocation (resume_token + model per run) → Tasks 1, 2, 3, 8. ✅
 - §2 naming collision `session_id`→`resume_token` → Task 1. ✅
-- §4 lifecycle parked→running as a new invocation on the same worktree → Task 6 (the worker mechanics; the queen state machine is A2). ✅
-- §5 model per invocation, verified `--model` on resume → Tasks 3, 6. ✅
-- §6 workspace as ordered roots → `cwd` + `--add-dir`; per-root mode/access; `requires_lease` only for `primary:rw` → Tasks 3, 4, 5. ✅ (lease *acquisition* is A2.)
-- §8 visibility → **A2** (queen-owned); not in A1. Noted out of scope. ✅
-- §11 shipped-code changes: Registry rename + model (T1), Invocation keying (T1/T2/T5/T6), `Supervisor.spawn` resolved workspace (T5), `memory_shim` project arg (T7). ✅ Bookkeeping session-scoping + lease table + workspace store are **A2/C** — correctly deferred.
-- §13 testing: state machine (A2), invocation keying (T2/T5/T6), workspace rendering + lease predicate (T4), `remember` targeting + unioned read (T7), migration from existing rows (T1). ✅ Lease acquire/release and visibility tests are A2.
+- §4 lifecycle parked→running as a new invocation on the same worktree → Task 8 (worker mechanics; the queen state machine is A2). ✅
+- §5 model per invocation, verified `--model` on resume → Tasks 3, 8. ✅
+- §6 workspace as ordered roots → `cwd` + `--add-dir`; per-root mode/access; `requires_lease` only for `primary:rw` → Tasks 3, 4, 7. ✅ (lease *acquisition* is A2.)
+- §8 visibility → **A2** (queen-owned); not in A1. Out of scope. ✅
+- §11 shipped-code changes: Registry rename + model (T1), invocation keying (T1/T2/T7/T8), `Supervisor.spawn` resolved workspace (T7), `memory_shim` project arg (T6). ✅ Bookkeeping session-scoping + lease table + workspace store are **A2/C** — correctly deferred.
+- §13 testing: state machine (A2), invocation keying (T2/T7/T8), workspace rendering + lease predicate (T4), `remember` targeting + unioned read (T6), migration from existing rows (T1). ✅ Lease acquire/release and visibility tests are A2.
 
-**Placeholder scan:** No TBD/TODO; every code step shows complete code. The two "adapt to existing fixture names" notes (Tasks 5, 6) point at real, named fixtures the implementer will see in the open test file — not vague instructions.
+**Placeholder scan:** No TBD/TODO; every code step shows complete code. The "adapt to existing fixture names" notes point at real, named fixtures the implementer sees in the open test file — not vague instructions. `write_memory`'s "rest of the existing body" is explicitly the current, unchanged code the implementer already has open.
 
-**Type consistency:** `session_local_id: int` everywhere (column, `task_started` 4th arg, wire field). `resume_token: str | None` consistent (column, `Task`, `AgentProcess.resume_token`, `latest_invocation().resume_token`). `write_memory(root_paths: dict[str, Path], project: str | None, ...)` and `addendum_for(root_paths: list[Path])` — the dict-vs-list split is intentional (write targets one named root; read unions a path list) and consistently applied in Tasks 5 and 7. `Workspace.single`/`Root` names match between Task 4's definition and Task 5's use.
+**Type consistency:** `session_local_id: int | None` everywhere (column, `task_started` 4th arg, wire field) — optional throughout, matching the decoupling rule. `resume_token: str | None` consistent (column, `Task`, `AgentProcess.resume_token`, `latest_invocation().resume_token`). `write_memory(root_paths: dict[str, Path], project: str | None, ...)` and `addendum_for(root_paths: list[Path])` — the dict-vs-list split is intentional (write targets one named root; read unions a path list) and applied consistently in Tasks 6 and 7. `now: Callable[[], datetime] | None` matches the existing `memory.py` signature. `Workspace.single`/`Root` names match between Task 4's definition and Task 7's use.
 
-**Cross-task ordering caveat (called out so a subagent doesn't trip):** Tasks 5 and 6 emit the 4-arg `task_started`, which only becomes valid when Task 8 lands. Each of those tasks' own tests avoids the dependency by using a sink stub that already accepts 4 args (and `memory_enabled=False` for Task 5's unit test). The full-suite green gate is at the end of Task 8. If executing strictly in order, keep the interim sink stubs 4-arg from Task 5 onward.
+**Green at every commit (the ordering contract holds):** Task 5 makes `session_local_id` optional, so the sink change lands before any producer emits it. Task 6 co-locates the memory type change with the current `spawn`'s call-site patch, before Task 7's rewrite. No commit ships suite-red; Task 8 Step 6 is a confirmation gate, not the first green.
 
 ---
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-07-10-sessions-a1-worker-invocations.md`. Two execution options:
+Plan complete and saved to `docs/superpowers/plans/2026-07-10-sessions-a1-worker-invocations.md`.
+
+**What A1 delivers:** *capability, not observable behavior.* When A1 merges to `main`, nothing changes for the CEO — `resume`, multi-root workspaces, and `--model` are all reachable only through new methods (`spawn_workspace`, `resume`) and richer params that no caller yet exercises; the wire and the queen are untouched except for one ride-along field. A1 is the foundation A2/D build on, so treat its merge as "the primitive exists," not "a feature shipped."
+
+Two execution options:
 
 1. **Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration.
 2. **Inline Execution** — execute tasks in this session using executing-plans, batch execution with checkpoints.
