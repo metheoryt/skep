@@ -5,6 +5,7 @@ import logging
 import re
 import shlex
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -47,6 +48,109 @@ def resolve_memory_file(repo_path: Path, slug: str) -> Path:
     if candidate.parent != root:
         raise ValueError(f"path escapes memory dir: {slug!r}")
     return candidate
+
+
+KINDS = frozenset({"gotcha", "constraint", "decision", "convention", "incident"})
+
+_FM_DELIM = "---"
+
+
+@dataclass(frozen=True)
+class MemoryFact:
+    slug: str
+    title: str
+    kind: str
+    created: str
+    superseded_by: str | None
+    body: str
+
+
+def _quote(value: str) -> str:
+    """Serialize a string as a quoted scalar. `title` is agent-supplied."""
+    if "\n" in value or "\r" in value:
+        raise ValueError("newline in frontmatter value")
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _unquote(raw: str) -> str | None:
+    """Inverse of `_quote`. Returns None if `raw` is not a quoted scalar."""
+    raw = raw.strip()
+    if len(raw) < 2 or raw[0] != '"' or raw[-1] != '"':
+        return None
+    out: list[str] = []
+    i = 1
+    while i < len(raw) - 1:
+        ch = raw[i]
+        if ch == "\\" and i + 1 < len(raw) - 1:
+            out.append(raw[i + 1])
+            i += 2
+            continue
+        if ch == '"':
+            return None  # unescaped quote before the end
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def serialize_fact(fact: MemoryFact) -> str:
+    """Render a fact to Markdown. Every frontmatter value is machine-generated
+    or escaped here -- §6's skip-on-malformed rule guards hand-edits and merge
+    artifacts, not routine agent input.
+    """
+    if fact.kind not in KINDS:
+        raise ValueError(f"unknown kind: {fact.kind!r}")
+    superseded = _quote(fact.superseded_by) if fact.superseded_by else "null"
+    return (
+        f"{_FM_DELIM}\n"
+        f"title: {_quote(fact.title)}\n"
+        f"kind: {fact.kind}\n"
+        f"created: {fact.created}\n"
+        f"superseded_by: {superseded}\n"
+        f"{_FM_DELIM}\n"
+        f"\n{fact.body.strip()}\n"
+    )
+
+
+def parse_fact(slug: str, text: str) -> MemoryFact | None:
+    """Parse a memory file. Returns None on anything malformed -- never raises."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != _FM_DELIM:
+        return None
+    try:
+        end = lines.index(_FM_DELIM, 1)
+    except ValueError:
+        return None
+
+    fields: dict[str, str] = {}
+    for line in lines[1:end]:
+        key, sep, value = line.partition(":")
+        if not sep:
+            return None
+        fields[key.strip()] = value.strip()
+
+    title = _unquote(fields.get("title", ""))
+    kind = fields.get("kind", "")
+    created = fields.get("created", "")
+    if title is None or kind not in KINDS or not created:
+        return None
+
+    raw_superseded = fields.get("superseded_by", "null")
+    if raw_superseded == "null":
+        superseded_by: str | None = None
+    else:
+        superseded_by = _unquote(raw_superseded)
+        if superseded_by is None:
+            return None
+
+    return MemoryFact(
+        slug=slug,
+        title=title,
+        kind=kind,
+        created=created,
+        superseded_by=superseded_by,
+        body="\n".join(lines[end + 1 :]).strip(),
+    )
 
 
 PROBE_TIMEOUT = 10.0
