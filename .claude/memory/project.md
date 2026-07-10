@@ -5,6 +5,13 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 ## Decisions
 
+- **Agent memory is tracked repo files** (`<repo>/.agent-memory/*.md`, one fact
+  per file), read into the spawn addendum for free and written through a stdio
+  `remember` MCP tool. Supersedes L1's gortex-daemon store, deleted 2026-07-09.
+  skep grants its agents `Bash,Edit,Write` + exact MCP tool names on argv —
+  before this, agents on this host had **no permissions at all** and the
+  MailboxShim was unreachable in production.
+
 - **PROJECT RENAMED `fleetd` → `skep` (2026-07-05), branch `skep-phase2`
   (formerly `fleetd-phase2`/`gortex-align`).** Hive metaphor: a *skep* is a
   traditional woven beehive — the vessel that houses the colony (queen + workers,

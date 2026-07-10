@@ -88,7 +88,7 @@ async def test_spawn_passes_addendum_for_the_parent_repo(tmp_path):
     await _sup(tmp_path, mem, captured).spawn("skep", "do it")
 
     assert captured["append_system_prompt"] == "## Memory\nrecall\n"
-    # The parent repo, NOT the worktree: gortex tracks the parent only.
+    # The parent repo, NOT the worktree: a fact must outlive a killed task.
     assert mem.seen == [tmp_path / "repos" / "skep"]
     assert captured["cwd"] != tmp_path / "repos" / "skep"
 
