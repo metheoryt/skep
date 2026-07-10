@@ -91,3 +91,23 @@ def test_open_migrates_old_schema_file(tmp_path):
     assert task.model is None                         # new column, back-filled NULL
     assert task.session_local_id == 1                 # back-filled to own id
     assert reg._conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_invocation_queries_group_by_session():
+    reg = Registry.open(":memory:")
+    # First invocation of a session: session_local_id == own id.
+    a = reg.add_task("nix", "t", "/wt/nix-1")
+    reg.update(a, session_local_id=a, resume_token="tok-a")
+    # A second invocation (resume) of the SAME session, same worktree.
+    b = reg.add_task("nix", "t", "/wt/nix-1")
+    reg.update(b, session_local_id=a, resume_token="tok-b")
+    # An unrelated session.
+    c = reg.add_task("web", "u", "/wt/web-3")
+    reg.update(c, session_local_id=c)
+
+    invs = reg.list_invocations(a)
+    assert [t.id for t in invs] == [a, b]
+    assert reg.latest_invocation(a).id == b
+    assert reg.latest_invocation(a).resume_token == "tok-b"
+    assert reg.latest_invocation(c).id == c
+    assert reg.latest_invocation(999) is None

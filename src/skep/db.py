@@ -129,6 +129,20 @@ class Registry:
         ).fetchall()
         return [self._row_to_task(r) for r in rows]
 
+    def list_invocations(self, session_local_id: int) -> list[Task]:
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE session_local_id = ? ORDER BY id",
+            (session_local_id,),
+        ).fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    def latest_invocation(self, session_local_id: int) -> Task | None:
+        row = self._conn.execute(
+            "SELECT * FROM tasks WHERE session_local_id = ? ORDER BY id DESC LIMIT 1",
+            (session_local_id,),
+        ).fetchone()
+        return self._row_to_task(row) if row else None
+
     def update(self, task_id: int, **fields: object) -> None:
         if not fields:
             return
