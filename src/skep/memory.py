@@ -6,6 +6,7 @@ import re
 import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -268,6 +269,87 @@ def parse_fact(slug: str, text: str) -> MemoryFact | None:
         superseded_by=superseded_by,
         body="\n".join(lines[end + 1 :]).strip(),
     )
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _next_free(root: Path, slug: str) -> tuple[str, Path]:
+    """A new fact never overwrites another agent's memory: `-2`, `-3`, ..."""
+    candidate = slug
+    n = 1
+    while True:
+        path = root / f"{candidate}.md"
+        if not path.exists():
+            return candidate, path
+        n += 1
+        candidate = f"{slug}-{n}"
+
+
+def write_memory(
+    repo_path: Path,
+    title: str,
+    body: str,
+    kind: str = "gotcha",
+    supersedes: str | None = None,
+    now: Callable[[], datetime] | None = None,
+) -> Path:
+    """Write one fact. Returns the written path.
+
+    Both `title` and `supersedes` are attacker-controlled input to a filesystem
+    path (spec §5.1) and both run slugify -> resolve -> containment-assert.
+    `supersedes` must additionally name a file that already exists.
+
+    Validates everything BEFORE writing anything: a rejected `supersedes` must
+    not leave a new memory behind.
+    """
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind: {kind!r}")
+
+    clock = now or _utcnow
+    root = memory_dir(repo_path)
+
+    old_path: Path | None = None
+    if supersedes is not None:
+        old_path = resolve_memory_file(repo_path, supersedes)
+        if not old_path.is_file():
+            raise ValueError(f"supersedes names no existing memory: {supersedes!r}")
+
+    slug = slugify(title)
+    resolve_memory_file(repo_path, slug)  # containment assert before mkdir
+    created = clock().astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    root.mkdir(parents=True, exist_ok=True)
+    final_slug, path = _next_free(root, slug)
+    # re-check the SUFFIXED slug, not just the base: `_next_free` can pick a
+    # different (suffixed) name on collision, and a symlink planted there
+    # would otherwise escape the containment check above.
+    resolve_memory_file(repo_path, final_slug)
+    fact = MemoryFact(
+        slug=final_slug,
+        title=title,
+        kind=kind,
+        created=created,
+        superseded_by=None,
+        body=body,
+    )
+    text = serialize_fact(fact)  # raises on a newline in title, before any write
+    path.write_text(text)
+
+    if old_path is not None:
+        old = parse_fact(old_path.stem, old_path.read_text())
+        if old is not None:
+            marked = MemoryFact(
+                slug=old.slug,
+                title=old.title,
+                kind=old.kind,
+                created=old.created,
+                superseded_by=final_slug,
+                body=old.body,
+            )
+            old_path.write_text(serialize_fact(marked))
+    return path
 
 
 PROBE_TIMEOUT = 10.0
