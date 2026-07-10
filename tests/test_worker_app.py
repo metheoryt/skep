@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from skep.config import WorkerConfig
-from skep.memory import MemoryPreflight
+from skep.memory import MemoryStore
 from skep.worker import app as worker_app
 from skep.worker.app import build_worker, serve
 from skep.transport import SwitchableEventSink, SwitchableMailboxClient
@@ -45,8 +45,9 @@ def test_build_worker_activates_mailbox_end_to_end():
 
 async def test_build_worker_supervisor_starts_shim_on_spawn(tmp_path):
     """Behavioral proof: a REAL assembled worker (via build_worker) starts a
-    mailbox shim and injects mcp_url into the agent on spawn -- it did NOT
-    before this fix, since Supervisor's mailbox_client was never supplied.
+    mailbox shim and injects a mailbox mcp_servers entry into the agent on
+    spawn -- it did NOT before this fix, since Supervisor's mailbox_client
+    was never supplied.
     """
     sup, _switch, _client = build_worker(_wcfg(
         repos_root=tmp_path / "repos", worktrees_root=tmp_path / "wt"))
@@ -104,7 +105,7 @@ async def test_build_worker_supervisor_starts_shim_on_spawn(tmp_path):
     tid = await sup.spawn("nix", "clean nvidia")
 
     assert len(shims) == 1
-    assert captured["mcp_url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
+    assert captured["mcp_servers"]["mailbox"]["url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
 
     pending = list(sup._tasks)  # type: ignore[attr-defined]
     if pending:
@@ -140,6 +141,6 @@ async def test_serve_refuses_whitespace_only_shared_secret(monkeypatch):
         await serve(wcfg)
 
 
-def test_build_worker_gives_supervisor_a_real_memory_preflight():
+def test_build_worker_gives_supervisor_a_real_memory_store():
     supervisor, _switch, _client = build_worker(_wcfg())
-    assert isinstance(supervisor._memory, MemoryPreflight)  # type: ignore[attr-defined]
+    assert isinstance(supervisor._memory, MemoryStore)  # type: ignore[attr-defined]

@@ -43,16 +43,16 @@ class AgentProcess:
         cwd: Path,
         claude_bin: str,
         config_dir: str | None = None,
-        mcp_url: str | None = None,
-        mcp_token: str | None = None,
+        mcp_servers: dict[str, dict] | None = None,
+        allowed_tools: list[str] | None = None,
         append_system_prompt: str | None = None,
     ) -> None:
         self._task_text = task_text
         self._cwd = cwd
         self._claude_bin = claude_bin
         self._config_dir = config_dir
-        self._mcp_url = mcp_url
-        self._mcp_token = mcp_token
+        self._mcp_servers = mcp_servers
+        self._allowed_tools = allowed_tools
         self._append_system_prompt = append_system_prompt
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr: bytes = b""
@@ -76,12 +76,13 @@ class AgentProcess:
         ]
         if self._append_system_prompt is not None:
             argv += ["--append-system-prompt", self._append_system_prompt]
-        if self._mcp_url is not None:
-            server: dict[str, object] = {"type": "http", "url": self._mcp_url}
-            if self._mcp_token is not None:
-                server["headers"] = {"Authorization": f"Bearer {self._mcp_token}"}
-            mcp_config = {"mcpServers": {"mailbox": server}}
-            argv += ["--mcp-config", json.dumps(mcp_config)]
+        if self._mcp_servers:
+            argv += ["--mcp-config", json.dumps({"mcpServers": self._mcp_servers})]
+        if self._allowed_tools:
+            # Comma-joined single token: the form verified by the §2.4 probe.
+            # The enumeration must be COMPLETE -- skep never relies on a host
+            # profile's allowlist surviving this flag (spec §2.2).
+            argv += ["--allowedTools", ",".join(self._allowed_tools)]
         return argv
 
     @property

@@ -1,6 +1,6 @@
 from skep.config import WorkerConfig
 from skep.db import Registry
-from skep.supervisor import Supervisor
+from skep.supervisor import BASE_TOOLS, MAILBOX_TOOLS, Supervisor
 
 
 def _cfg(tmp_path, memory_enabled=True):
@@ -121,3 +121,104 @@ async def test_spawn_succeeds_when_the_probe_raises(tmp_path):
     tid = await _sup(tmp_path, RaisingMemory(), captured).spawn("skep", "do it")
     assert tid > 0
     assert "append_system_prompt" not in captured
+
+
+def test_base_tools_grant_write_but_not_read():
+    # spec §2.3: Bash,Edit,Write on argv; Read needs no grant.
+    assert BASE_TOOLS == ("Bash", "Edit", "Write")
+    assert "Read" not in BASE_TOOLS
+
+
+def test_mailbox_tools_are_enumerated_not_globbed():
+    # spec §8.1 carry-forward 2: the wildcard was never validated.
+    assert MAILBOX_TOOLS == ("mcp__mailbox__send_message", "mcp__mailbox__read_inbox")
+    assert not any("*" in t for t in MAILBOX_TOOLS)
+
+
+class FakeMailboxClient:
+    """Enough of MailboxClient for Supervisor to take the shim path."""
+
+
+def _sup_with_mailbox(tmp_path, captured):
+    shims = []
+
+    class FakeShim:
+        def __init__(self, client, tid, token):
+            self.token = token
+            shims.append(self)
+
+        async def start(self):
+            return "http://127.0.0.1:9/mcp"
+
+        async def stop(self):
+            pass
+
+    def agent_factory(**kwargs):
+        captured.update(kwargs)
+        return FakeAgent()
+
+    return Supervisor(
+        _cfg(tmp_path),
+        Registry.open(":memory:"),
+        RecordingSink(),
+        agent_factory=agent_factory,
+        worktree_factory=lambda *a, **k: None,
+        mailbox_client=FakeMailboxClient(),
+        shim_factory=FakeShim,
+        memory=StubMemory(),
+    )
+
+
+async def test_memory_server_present_when_mailbox_is_off(tmp_path):
+    captured = {}
+    await _sup(tmp_path, StubMemory(), captured).spawn("skep", "do it")
+    assert set(captured["mcp_servers"]) == {"memory"}
+    assert captured["mcp_servers"]["memory"]["type"] == "stdio"
+    assert "mcp__memory__remember" in captured["allowed_tools"]
+
+
+async def test_both_servers_when_mailbox_is_on(tmp_path):
+    captured = {}
+    await _sup_with_mailbox(tmp_path, captured).spawn("skep", "do it")
+    assert set(captured["mcp_servers"]) == {"memory", "mailbox"}
+    assert captured["mcp_servers"]["memory"]["type"] == "stdio"
+    assert captured["mcp_servers"]["mailbox"]["type"] == "http"
+    assert "mcp__memory__remember" in captured["allowed_tools"]
+    assert "mcp__mailbox__send_message" in captured["allowed_tools"]
+
+
+async def test_memory_disabled_omits_server_and_grant(tmp_path):
+    captured = {}
+    sup = _sup(tmp_path, StubMemory(), captured, memory_enabled=False)
+    await sup.spawn("skep", "do it")
+    assert "memory" not in (captured.get("mcp_servers") or {})
+    assert "mcp__memory__remember" not in captured["allowed_tools"]
+    assert "append_system_prompt" not in captured
+
+
+async def test_baseline_grant_present_even_when_memory_disabled(tmp_path):
+    # The coding baseline is not memory's to withhold: agents could not write
+    # files at all before this plan (spec §2.1).
+    captured = {}
+    sup = _sup(tmp_path, StubMemory(), captured, memory_enabled=False)
+    await sup.spawn("skep", "do it")
+    assert captured["allowed_tools"] == list(BASE_TOOLS)
+
+
+async def test_read_failure_still_yields_shim_and_grant(tmp_path):
+    # spec §6: read failure does not disable writing. RaisingMemory already
+    # exists in this file.
+    captured = {}
+    await _sup(tmp_path, RaisingMemory(), captured).spawn("skep", "do it")
+    assert "append_system_prompt" not in captured
+    assert "memory" in captured["mcp_servers"]
+    assert "mcp__memory__remember" in captured["allowed_tools"]
+
+
+async def test_shim_is_pointed_at_the_parent_repo_not_the_worktree(tmp_path):
+    captured = {}
+    await _sup(tmp_path, StubMemory(), captured).spawn("skep", "do it")
+    args = captured["mcp_servers"]["memory"]["args"]
+    # The repo path arrives as argv, so the agent cannot redirect the write.
+    assert args[-1] == str(tmp_path / "repos" / "skep")
+    assert args[-1] != str(captured["cwd"])

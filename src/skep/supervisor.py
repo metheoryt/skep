@@ -14,6 +14,26 @@ from skep.formatting import activity_line, milestone_message
 from skep.memory import MemoryProbe
 from skep.transport import EventSink, MailboxClient
 from skep.worker.mcp_shim import MailboxShim
+from skep.worker.memory_shim import MEMORY_TOOLS, memory_shim_server
+
+BASE_TOOLS: tuple[str, ...] = ("Bash", "Edit", "Write")
+"""The coding baseline (spec §2.3). `Read` is absent: it needs no grant (§2.5).
+
+Enumerated on argv because skep may never assume a host profile's allowlist
+survives its own --allowedTools (§2.2).
+"""
+
+MAILBOX_TOOLS: tuple[str, ...] = (
+    "mcp__mailbox__send_message",
+    "mcp__mailbox__read_inbox",
+)
+"""Exact names, not `mcp__mailbox__*`: the wildcard form was never validated.
+
+`mailbox` here is the --mcp-config MAP KEY. MailboxShim advertises itself as
+FastMCP("skep-mailbox"), so these names are only correct if the grant follows
+the key rather than the advertised name. Task 8 settles it; until it runs,
+treat this constant as unverified.
+"""
 
 
 class CapacityError(Exception):
@@ -78,17 +98,28 @@ class Supervisor:
                 claude_bin=self._cfg.claude_bin,
                 config_dir=self._cfg.claude_config_dir,
             )
-            if self._cfg.memory_enabled and self._memory is not None:
-                # Soft dependency: a broken probe must never fail a spawn.
-                # `repo_path` (the parent repo) is what gortex tracks -- the
-                # agent's worktree is not indexed.
-                try:
-                    addendum = await self._memory.addendum_for(repo_path)
-                except Exception as exc:
-                    self._reg.log_audit(tid, "error", f"memory probe failed: {exc}")
-                    addendum = None
-                if addendum is not None:
-                    agent_kwargs["append_system_prompt"] = addendum
+            mcp_servers: dict[str, dict] = {}
+            allowed_tools: list[str] = list(BASE_TOOLS)
+
+            if self._cfg.memory_enabled:
+                # Read is a soft dependency: a broken store must never fail a
+                # spawn, and must never take down the WRITE channel either
+                # (spec §6). `repo_path` is the PARENT repo -- a fact must
+                # survive task failure and branch abandonment.
+                if self._memory is not None:
+                    try:
+                        addendum = await self._memory.addendum_for(repo_path)
+                    except Exception as exc:
+                        self._reg.log_audit(tid, "error", f"memory read failed: {exc}")
+                        addendum = None
+                    if addendum is not None:
+                        agent_kwargs["append_system_prompt"] = addendum
+                # The shim is a stdio subprocess of `claude`, not of skep: no
+                # start(), no _shims entry, no teardown, no leak on a failed
+                # spawn (spec §5.2).
+                mcp_servers["memory"] = memory_shim_server(repo_path)
+                allowed_tools += MEMORY_TOOLS
+
             if self._mailbox_client is not None:
                 # Per-agent bearer token: the shim enforces it, the agent
                 # presents it via --mcp-config. Defeats a passive
@@ -98,8 +129,14 @@ class Supervisor:
                 token = secrets.token_urlsafe(32)
                 shim = self._shim_factory(self._mailbox_client, tid, token=token)
                 mcp_url = await shim.start()
-                agent_kwargs["mcp_url"] = mcp_url
-                agent_kwargs["mcp_token"] = token
+                server: dict[str, object] = {"type": "http", "url": mcp_url}
+                server["headers"] = {"Authorization": f"Bearer {token}"}
+                mcp_servers["mailbox"] = server
+                allowed_tools += MAILBOX_TOOLS
+
+            if mcp_servers:
+                agent_kwargs["mcp_servers"] = mcp_servers
+            agent_kwargs["allowed_tools"] = allowed_tools
 
             agent = self._agent_factory(**agent_kwargs)
             await agent.start()

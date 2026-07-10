@@ -18,8 +18,7 @@ def test_append_system_prompt_passed_verbatim():
 def test_append_system_prompt_coexists_with_mcp_config():
     argv = _argv(
         append_system_prompt="## Memory",
-        mcp_url="http://127.0.0.1:5000/mcp",
-        mcp_token="secret",
+        mcp_servers={"mailbox": {"type": "http", "url": "http://127.0.0.1:5000/mcp"}},
     )
     assert "--append-system-prompt" in argv
     assert "--mcp-config" in argv

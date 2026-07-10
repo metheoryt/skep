@@ -37,7 +37,8 @@ async def test_agent_can_send_via_mcp_shim(tmp_path):
         agent = AgentProcess(
             "Use the send_message tool to send to 'ceo' with subject 'hi' "
             "and body 'from agent', then stop.",
-            str(tmp_path), "claude", mcp_url=url)
+            str(tmp_path), "claude",
+            mcp_servers={"mailbox": {"type": "http", "url": url}})
         await agent.start()
         # Drain stdout events; this awaits subprocess exit internally.
         async for _event in agent.events():

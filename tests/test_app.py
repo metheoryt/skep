@@ -93,7 +93,8 @@ async def test_build_worker_and_router_wires_in_process_mailbox(tmp_path):
 
 async def test_build_worker_and_router_supervisor_starts_shim_on_spawn(tmp_path):
     """Behavioral proof: spawning through the real assembled Supervisor
-    starts a mailbox shim and injects mcp_url into the agent."""
+    starts a mailbox shim and injects a mailbox mcp_servers entry into the
+    agent."""
     bk = Bookkeeping.open(":memory:")
     registry = Registry.open(":memory:")
     _router, sup = build_worker_and_router(
@@ -154,7 +155,7 @@ async def test_build_worker_and_router_supervisor_starts_shim_on_spawn(tmp_path)
     tid = await sup.spawn("nix", "clean nvidia")
 
     assert len(shims) == 1
-    assert captured["mcp_url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
+    assert captured["mcp_servers"]["mailbox"]["url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
 
     pending = list(sup._tasks)  # type: ignore[attr-defined]
     if pending:

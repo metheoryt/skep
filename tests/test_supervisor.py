@@ -67,7 +67,8 @@ async def test_spawn_records_task_and_emits_task_started(tmp_path):
     sink = RecordingSink()
     captured = {}
 
-    def agent_factory(task_text, cwd, claude_bin, config_dir=None):
+    def agent_factory(task_text, cwd, claude_bin, config_dir=None,
+                       mcp_servers=None, allowed_tools=None):
         captured["config_dir"] = config_dir
         captured["cwd"] = cwd
         return FakeAgent([Event(kind="system", session_id="s9")])

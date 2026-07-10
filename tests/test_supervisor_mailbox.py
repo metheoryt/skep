@@ -17,13 +17,13 @@ def _cfg(tmp_path, max_concurrent=8):
 
 class FakeAgent:
     def __init__(self, task_text, cwd, claude_bin, config_dir=None,
-                 mcp_url=None, mcp_token=None):
+                 mcp_servers=None, allowed_tools=None):
         self.task_text = task_text
         self.cwd = cwd
         self.claude_bin = claude_bin
         self.config_dir = config_dir
-        self.mcp_url = mcp_url
-        self.mcp_token = mcp_token
+        self.mcp_servers = mcp_servers
+        self.allowed_tools = allowed_tools
         self.pid = 123
         self.killed = False
         self.started = False
@@ -126,11 +126,13 @@ async def test_spawn_starts_shim_and_passes_mcp_url(tmp_path):
     assert len(shims) == 1
     assert shims[0].started
     assert shims[0].tid == tid
-    assert captured["mcp_url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
+    server = captured["mcp_servers"]["mailbox"]
+    assert server["url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
     # a per-agent bearer token is generated and handed to BOTH the shim (to
     # enforce) and the agent (to present) -- and they must match.
-    assert isinstance(captured["mcp_token"], str) and captured["mcp_token"]
-    assert captured["mcp_token"] == shims[0].token
+    token = server["headers"]["Authorization"].removeprefix("Bearer ")
+    assert isinstance(token, str) and token
+    assert token == shims[0].token
     assert sup._shims[tid] is shims[0]
 
     # let the background run_events task drain and stop the shim.
@@ -157,23 +159,26 @@ async def test_spawn_without_mailbox_client_passes_no_mcp_url(tmp_path):
     )
     await sup.spawn("nix", "clean nvidia")
 
-    # no shim path taken: mcp_url/mcp_token are not forced onto agent_factory
-    # at all (preserves compatibility with narrower pre-Task-10 factories).
-    assert "mcp_url" not in captured
-    assert "mcp_token" not in captured
+    # no shim path taken: the server map carries no mailbox entry
+    assert "mailbox" not in (captured.get("mcp_servers") or {})
     assert sup._shims == {}
 
 
 async def test_existing_agent_factory_signature_unaffected_when_no_mailbox(tmp_path):
-    """Regression guard: agent_factory signatures with no mcp_url/mcp_token
-    params (as used by tests predating this task) must still work when
-    mailbox_client is None -- those kwargs must not be forced onto them."""
+    """Regression guard: an agent_factory that predates the mailbox/memory
+    kwargs still works when mailbox_client is None -- as long as it accepts
+    (and may ignore) `mcp_servers`/`allowed_tools`. Those two are NOT forced
+    conditionally: `allowed_tools` (the BASE_TOOLS grant) is passed on every
+    spawn regardless of mailbox/memory state (spec §2.1), so a factory that
+    does not accept it at all is no longer a supported shape -- only the
+    absence of a "mailbox" mcp_servers entry is guaranteed here."""
     cfg = _cfg(tmp_path)
     reg = Registry.open(":memory:")
     sink = RecordingSink()
     captured = {}
 
-    def agent_factory(task_text, cwd, claude_bin, config_dir=None):
+    def agent_factory(task_text, cwd, claude_bin, config_dir=None,
+                       mcp_servers=None, allowed_tools=None):
         captured["config_dir"] = config_dir
         return FakeAgent(task_text, cwd, claude_bin, config_dir)
 
