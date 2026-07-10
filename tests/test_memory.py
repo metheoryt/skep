@@ -330,11 +330,17 @@ def test_write_memory_targets_named_project(tmp_path):
     b = tmp_path / "b"
     (a / ".agent-memory").mkdir(parents=True)
     (b / ".agent-memory").mkdir(parents=True)
-    roots = {"a": a, "b": b}
+    # Construct dict in insertion order where insertion-first != alphabetical-first.
+    # This discriminates against a regression from next(iter(...)) to sorted()/min().
+    roots = {"b": b, "a": a}
     p_default = write_memory(roots, None, "goes to first", "x", "gotcha")
-    p_named = write_memory(roots, "b", "goes to b", "y", "gotcha")
-    assert (a / ".agent-memory") in p_default.parents
-    assert (b / ".agent-memory") in p_named.parents
+    p_named_a = write_memory(roots, "a", "goes to a", "y", "gotcha")
+    p_named_b = write_memory(roots, "b", "goes to b", "z", "gotcha")
+    # Default (project=None) should go to insertion-first root "b", not alphabetical-first "a"
+    assert (b / ".agent-memory") in p_default.parents
+    # Named projects should still work correctly
+    assert (a / ".agent-memory") in p_named_a.parents
+    assert (b / ".agent-memory") in p_named_b.parents
 
 
 def test_write_memory_unknown_project_raises(tmp_path):

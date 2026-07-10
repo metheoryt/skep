@@ -93,6 +93,57 @@ def test_open_migrates_old_schema_file(tmp_path):
     assert reg._conn.execute("PRAGMA user_version").fetchone()[0] == 1
 
 
+def test_open_idempotent_on_already_migrated_db(tmp_path):
+    # A pre-migration DB: seed it, migrate once, then re-open the same file.
+    # The idempotency guard (if version < 1:) must keep the second open a no-op.
+    db_file = tmp_path / "already_migrated.sqlite"
+    conn = sqlite3.connect(db_file)
+    conn.executescript(
+        """
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT NOT NULL,
+            task TEXT NOT NULL,
+            worktree_path TEXT NOT NULL,
+            session_id TEXT,
+            pid INTEGER,
+            topic_id INTEGER,
+            mode TEXT NOT NULL DEFAULT 'native',
+            status TEXT NOT NULL DEFAULT 'spawning',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER, kind TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO tasks (repo, task, worktree_path, session_id, status, created_at)"
+        " VALUES ('nix', 't', '/wt/nix-1', 'sess-token-1', 'done', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    # First open: migrate from v0 to v1
+    reg1 = Registry.open(str(db_file))
+    task1 = reg1.get_task(1)
+    assert task1.resume_token == "sess-token-1"
+    version1 = reg1._conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version1 == 1
+    reg1.close()
+
+    # Second open: should NOT re-run the migration (the guard must hold)
+    reg2 = Registry.open(str(db_file))
+    task2 = reg2.get_task(1)
+    # If the idempotency guard broke and the ALTERs re-ran, this would crash
+    # (RENAME COLUMN session_id would fail because the column no longer exists).
+    assert task2.resume_token == "sess-token-1"
+    version2 = reg2._conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version2 == 1
+    reg2.close()
+
+
 def test_invocation_queries_group_by_session():
     reg = Registry.open(":memory:")
     # First invocation of a session: session_local_id == own id.
