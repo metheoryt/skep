@@ -53,8 +53,10 @@ class FakeAgent:
 class RecordingSink:
     def __init__(self):
         self.events = []
+        self.last_session_local_id = None
 
     async def task_started(self, local_id, repo, title, session_local_id=None):
+        self.last_session_local_id = session_local_id
         self.events.append(("started", local_id, repo, title))
 
     async def activity(self, local_id, line):
@@ -181,6 +183,7 @@ async def test_spawn_workspace_renders_multi_root_and_sets_session_local_id(
     assert task.model == "claude-sonnet-5"
     assert created["add_dirs"] == [worker_config_no_memory.repos_root / "main"]
     assert created["model"] == "claude-sonnet-5"
+    assert fake_sink.last_session_local_id == tid  # assert task_started emitted correct session_local_id
 
 
 async def test_spawn_is_single_root_workspace(worker_config_no_memory, fake_sink):
@@ -199,4 +202,4 @@ async def test_spawn_is_single_root_workspace(worker_config_no_memory, fake_sink
     task = reg.get_task(tid)
     assert task.session_local_id == tid
     assert task.model is None
-    assert created.get("add_dirs") in (None, [])
+    assert created["add_dirs"] == []
