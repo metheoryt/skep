@@ -76,5 +76,35 @@ async def test_in_memory_sink_accepts_session_local_id():
 
     sink = InMemoryEventSink(RecordingInbox(), "h1", "default")
     await sink.task_started(7, "nix", "t", 7)   # 4-arg is the new contract
+    after_four_arg = recorded.copy()
     await sink.task_started(8, "nix", "t")       # 3-arg still valid (optional)
-    assert recorded["local_id"] == 8
+    after_three_arg = recorded.copy()
+    assert after_four_arg["local_id"] == 7
+    assert after_three_arg["local_id"] == 8
+
+
+async def test_switchable_forwards_session_local_id_to_target():
+    """Regression: a dropped 4th positional arg in SwitchableEventSink.task_started
+    would leave this stub's captured session_local_id at its None default."""
+
+    class _CapturingSessionLocalIdRec:
+        def __init__(self):
+            self.session_local_id = "unset"
+
+        async def task_started(self, local_id, repo, title, session_local_id=None):
+            self.session_local_id = session_local_id
+
+        async def activity(self, local_id, line):
+            pass
+
+        async def milestone(self, local_id, text):
+            pass
+
+        async def done(self, local_id, status, summary):
+            pass
+
+    rec = _CapturingSessionLocalIdRec()
+    s = SwitchableEventSink()
+    s.target = rec
+    await s.task_started(1, "nix", "t", 42)
+    assert rec.session_local_id == 42

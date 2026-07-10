@@ -376,3 +376,23 @@ def test_task_started_msg_includes_session_local_id():
 def test_task_started_msg_defaults_session_local_id_none():
     msg = wire.task_started_msg(7, "nix", "t")
     assert msg["session_local_id"] is None
+
+
+class CapturingWs:
+    """Stands in for a ws whose send_str records the decoded outgoing frame —
+    used to verify WsEventSink builds the wire message with the 4th arg,
+    not just that wire.task_started_msg itself accepts it."""
+
+    def __init__(self):
+        self.sent: list[dict] = []
+
+    async def send_str(self, data):
+        self.sent.append(wire.decode(data))
+
+
+async def test_ws_event_sink_forwards_session_local_id():
+    ws = CapturingWs()
+    sink = WsEventSink(ws)  # type: ignore[arg-type]
+    await sink.task_started(1, "nix", "t", 42)
+    assert ws.sent[-1]["local_id"] == 1
+    assert ws.sent[-1]["session_local_id"] == 42
