@@ -451,6 +451,53 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   preflight; spawn succeeds in every unavailable case; addendum's recommended
   invocation === the string preflight smoke-checks (guards drift).
 
+- **SESSIONS design (multi-provider evolution, sub-project A) DESIGNED + A1 BUILT
+  & MERGED 2026-07-11.** Spec `docs/superpowers/specs/2026-07-10-sessions-design.md`
+  makes **Session** a first-class primitive: three concepts — **Session** (pinned
+  execution context: host/profile/runner/workspace/worktrees; owns a Telegram topic;
+  fleet-global `ref`; parkable/resumable) / **Invocation** (one runner run; holds
+  `resume_token` + `model`) / **Manager** (durable identity above sessions; continuity =
+  memory+inbox, NOT a transcript; rehydrated fresh). Split along a §3 ownership boundary
+  into **A1 (worker-side, DONE)** and **A2 (queen-side, NEXT)**.
+  - **A1 = worker Invocations.** Plan
+    `docs/superpowers/plans/2026-07-10-sessions-a1-worker-invocations.md`; 12 commits,
+    merged to `main` (head `e6d1deb`, pushed to origin), subagent-driven w/ per-task +
+    Opus whole-branch review. Shipped: DB migration (`session_id`→`resume_token`, add
+    `model`/`session_local_id`, `PRAGMA user_version`, back-fill `session_local_id=id`)
+    + invocation-grouping queries; `AgentProcess` renders `--add-dir`/`--model`/`--resume`;
+    `workspace.py` `Root`/`Workspace` value types + `requires_lease` predicate; multi-root
+    memory (project-targeted write, unioned read; all L1.1 security invariants preserved);
+    `Supervisor.spawn_workspace` (multi-root+model+session_local_id) with `spawn` a thin
+    backward-compat wrapper; `Supervisor.resume` (new invocation, same worktree, v1-minimal
+    = resume_token+model+BASE_TOOLS only, no memory/mailbox). Suite 338 passed / 2 skipped.
+    **A1 delivers CAPABILITY, not visible behavior** — resume/multi-root/`--model` are
+    reachable only through new methods no caller yet exercises; the queen is untouched
+    except one ride-along wire field.
+  - **REF-KEYING DECISION (load-bearing, non-obvious — the code embodies it but does not
+    self-document why):** the spec says the worker's invocation is "keyed by session ref",
+    but the queen mints `ref` only AFTER `task_started` and `RemoteWorker.spawn` returns
+    literal `0` — so at first-spawn the worker cannot key by a ref that doesn't exist yet.
+    Resolution: the WORKER owns a local `session_local_id`; a first invocation's
+    `session_local_id == its own task id`; a resume reuses the originating session's id;
+    **A2 maps `ref → (host, profile, session_local_id)`** (extends the existing
+    `Bookkeeping.by_worker_task`). This honors the ownership split without inverting the
+    working fire-and-forget spawn protocol. The single A1→A2 wire interface is one OPTIONAL
+    field: `task_started` carries `session_local_id` (queen ignores it until A2).
+  - **A2 = queen-side (NEXT sub-project; own spec→plan→build cycle).** Scope: session
+    registry (`ref ↔ session_local_id` map), **lease enforcement for `primary:rw`** (A1
+    ships the `requires_lease` predicate but never acquires), visibility/inheritance, and
+    **topic-follows-session**. Start from the spec's B/C/E seam interfaces + the A1 plan.
+  - **A2 HANDOFF GAP (flagged by the A1 whole-branch review; NOT an A1 defect):** the
+    register-replay `_active_payload` in `ws_transport.py` does NOT carry `session_local_id`,
+    so an A2 queen reconnect would lose session identity on replayed active tasks. Fold into
+    the A2 plan (thread `session_local_id` through the replay payload when A2 consumes it).
+  - Later Sessions sub-projects (not started): B (runner seam — pydantic-ai alongside
+    headless Claude Code), C (fleet capability catalog / name→path resolution), D (session
+    spawning), E (Telegram role + probes). SDD task-by-task record + deferred Minors live in
+    `.superpowers/sdd/progress.md` (git-ignored local scratch — not synced).
+  - **On merge (still TODO):** README's "Agent memory" section and ARCHITECTURE.md §7 +
+    the L0–L5 ladder get rewritten by the Sessions model.
+
 ## Gotchas
 
 - **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
