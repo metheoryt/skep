@@ -224,8 +224,14 @@ class MemoryStore:
             f"{body}\n{_WRITE_INSTRUCTIONS}"
         )
 
-    async def addendum_for(self, repo_path: Path) -> str | None:
-        return self.render(self._load(repo_path))
+    async def addendum_for(self, root_paths: list[Path]) -> str | None:
+        facts: list[MemoryFact] = []
+        for repo_path in root_paths:
+            facts.extend(self._load(repo_path))
+        # _load sorts within a root; re-sort the union so newest-first holds
+        # across roots too.
+        facts.sort(key=lambda f: f.created, reverse=True)
+        return self.render(facts)
 
 
 def parse_fact(slug: str, text: str) -> MemoryFact | None:
@@ -286,7 +292,8 @@ def _next_free(root: Path, slug: str) -> tuple[str, Path]:
 
 
 def write_memory(
-    repo_path: Path,
+    root_paths: dict[str, Path],
+    project: str | None,
     title: str,
     body: str,
     kind: str = "gotcha",
@@ -302,6 +309,14 @@ def write_memory(
     Validates everything BEFORE writing anything: a rejected `supersedes` must
     not leave a new memory behind.
     """
+    if project is None:
+        # Default target is the first root (insertion-ordered dict).
+        repo_path = next(iter(root_paths.values()))
+    elif project in root_paths:
+        repo_path = root_paths[project]
+    else:
+        raise ValueError(f"unknown project: {project!r} (have {list(root_paths)})")
+    # ---- everything below is the existing body, unchanged ----
     if kind not in KINDS:
         raise ValueError(f"unknown kind: {kind!r}")
 
@@ -353,4 +368,4 @@ def write_memory(
 class MemoryProbe(Protocol):
     """What Supervisor needs from memory: an addendum, or None."""
 
-    async def addendum_for(self, repo_path: Path) -> str | None: ...
+    async def addendum_for(self, root_paths: list[Path]) -> str | None: ...

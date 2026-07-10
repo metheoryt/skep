@@ -12,6 +12,7 @@ from skep.memory import (
     resolve_memory_file,
     serialize_fact,
     slugify,
+    write_memory,
 )
 
 
@@ -178,7 +179,7 @@ requires_non_root = pytest.mark.skipif(
 
 
 async def test_addendum_missing_dir_keeps_write_instructions(tmp_path):
-    out = await MemoryStore().addendum_for(tmp_path)
+    out = await MemoryStore().addendum_for([tmp_path])
     assert out is not None
     assert "remember" in out
     assert "Durable facts other agents learned" not in out
@@ -186,7 +187,7 @@ async def test_addendum_missing_dir_keeps_write_instructions(tmp_path):
 
 async def test_addendum_renders_slug_verbatim(tmp_path):
     _write(tmp_path, "stack-90s", "Stack takes 90s", "2026-07-09T10:00:00Z")
-    out = await MemoryStore().addendum_for(tmp_path)
+    out = await MemoryStore().addendum_for([tmp_path])
     # The bracketed slug is load-bearing: it is the string the agent must pass
     # back as `supersedes`. Unguessable from the title once `-2` exists.
     assert "[stack-90s]" in out
@@ -197,14 +198,14 @@ async def test_addendum_renders_slug_verbatim(tmp_path):
 async def test_addendum_sorts_newest_first(tmp_path):
     _write(tmp_path, "older", "Older", "2026-07-01T00:00:00Z")
     _write(tmp_path, "newer", "Newer", "2026-07-09T00:00:00Z")
-    out = await MemoryStore().addendum_for(tmp_path)
+    out = await MemoryStore().addendum_for([tmp_path])
     assert out.index("[newer]") < out.index("[older]")
 
 
 async def test_superseded_facts_excluded_but_file_remains(tmp_path):
     _write(tmp_path, "old", "Old", "2026-07-01T00:00:00Z", superseded_by="new")
     _write(tmp_path, "new", "New", "2026-07-09T00:00:00Z")
-    out = await MemoryStore().addendum_for(tmp_path)
+    out = await MemoryStore().addendum_for([tmp_path])
     assert "[old]" not in out
     assert "[new]" in out
     assert (tmp_path / ".agent-memory" / "old.md").exists()
@@ -213,7 +214,7 @@ async def test_superseded_facts_excluded_but_file_remains(tmp_path):
 async def test_one_malformed_file_does_not_blind_the_others(tmp_path):
     _write(tmp_path, "good", "Good", "2026-07-09T00:00:00Z")
     (tmp_path / ".agent-memory" / "bad.md").write_text("garbage, no frontmatter")
-    out = await MemoryStore().addendum_for(tmp_path)
+    out = await MemoryStore().addendum_for([tmp_path])
     assert "[good]" in out
 
 
@@ -226,7 +227,7 @@ async def test_byte_cap_truncates_newest_first_and_says_so(tmp_path):
             f"2026-07-0{i}T00:00:00Z",
             body="x" * 100,
         )
-    out = await MemoryStore(max_bytes=300).addendum_for(tmp_path)
+    out = await MemoryStore(max_bytes=300).addendum_for([tmp_path])
     assert "older memories omitted" in out
     assert "[fact-9]" in out  # newest survives
     assert "[fact-0]" not in out  # oldest dropped
@@ -241,7 +242,7 @@ async def test_unreadable_dir_yields_no_recall_but_keeps_instructions(caplog, tm
     d.chmod(0o000)
     try:
         with caplog.at_level(logging.WARNING, logger="skep.memory"):
-            out = await MemoryStore().addendum_for(tmp_path)
+            out = await MemoryStore().addendum_for([tmp_path])
     finally:
         d.chmod(0o755)
     assert out is not None and "remember" in out
@@ -258,7 +259,7 @@ async def test_agent_memory_as_regular_file_yields_no_recall_and_one_warning(
     # non-root alike, so this guards Finding 1 even where the chmod test skips.
     (tmp_path / ".agent-memory").write_text("i am a file, not a directory")
     with caplog.at_level(logging.WARNING, logger="skep.memory"):
-        out = await MemoryStore().addendum_for(tmp_path)
+        out = await MemoryStore().addendum_for([tmp_path])
     assert out is not None and "remember" in out
     assert "Durable facts other agents learned" not in out
     assert len(caplog.records) == 1
@@ -271,7 +272,7 @@ async def test_malformed_files_produce_one_aggregate_warning(caplog, tmp_path):
     (d / "bad2.md").write_text("also garbage")
     (d / "bad3.md").write_text("---\ntitle: unquoted\n---\nbody")
     with caplog.at_level(logging.WARNING, logger="skep.memory"):
-        out = await MemoryStore().addendum_for(tmp_path)
+        out = await MemoryStore().addendum_for([tmp_path])
     assert "[good]" in out
     assert len(caplog.records) == 1
     msg = caplog.records[0].getMessage()
@@ -292,7 +293,7 @@ async def test_unreadable_and_malformed_file_share_one_warning(caplog, tmp_path)
     unreadable.chmod(0o000)
     try:
         with caplog.at_level(logging.WARNING, logger="skep.memory"):
-            out = await MemoryStore().addendum_for(tmp_path)
+            out = await MemoryStore().addendum_for([tmp_path])
     finally:
         unreadable.chmod(0o644)
     assert "[good]" in out
@@ -305,6 +306,39 @@ async def test_unreadable_and_malformed_file_share_one_warning(caplog, tmp_path)
 async def test_clean_directory_emits_no_warnings(caplog, tmp_path):
     _write(tmp_path, "good", "Good", "2026-07-09T00:00:00Z")
     with caplog.at_level(logging.WARNING, logger="skep.memory"):
-        out = await MemoryStore().addendum_for(tmp_path)
+        out = await MemoryStore().addendum_for([tmp_path])
     assert "[good]" in out
     assert len(caplog.records) == 0
+
+
+async def test_addendum_unions_roots(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    (a / ".agent-memory").mkdir(parents=True)
+    (b / ".agent-memory").mkdir(parents=True)
+    write_memory({"a": a}, "a", "fact in A", "body a", "gotcha")
+    write_memory({"b": b}, "b", "fact in B", "body b", "gotcha")
+
+    store = MemoryStore()
+    addendum = await store.addendum_for([a, b])
+    assert "fact in A" in addendum
+    assert "fact in B" in addendum
+
+
+def test_write_memory_targets_named_project(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    (a / ".agent-memory").mkdir(parents=True)
+    (b / ".agent-memory").mkdir(parents=True)
+    roots = {"a": a, "b": b}
+    p_default = write_memory(roots, None, "goes to first", "x", "gotcha")
+    p_named = write_memory(roots, "b", "goes to b", "y", "gotcha")
+    assert (a / ".agent-memory") in p_default.parents
+    assert (b / ".agent-memory") in p_named.parents
+
+
+def test_write_memory_unknown_project_raises(tmp_path):
+    a = tmp_path / "a"
+    (a / ".agent-memory").mkdir(parents=True)
+    with pytest.raises(ValueError):
+        write_memory({"a": a}, "nope", "t", "b", "gotcha")

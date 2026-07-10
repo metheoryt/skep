@@ -61,7 +61,7 @@ async def test_stdio_memory_and_http_mailbox_both_resolve(tmp_path):
             cwd=wt,
             claude_bin="claude",
             mcp_servers={
-                "memory": memory_shim_server(repo),
+                "memory": memory_shim_server([("repo", repo)]),
                 "mailbox": {
                     "type": "http",
                     "url": url,

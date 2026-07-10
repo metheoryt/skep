@@ -52,19 +52,19 @@ class RecordingSink:
 
 
 class StubMemory:
-    """MemoryProbe stub: hands back a fixed addendum, records the repo path."""
+    """MemoryProbe stub: hands back a fixed addendum, records the root paths."""
 
     def __init__(self, addendum="## Memory\n"):
         self.addendum = addendum
         self.seen = []
 
-    async def addendum_for(self, repo_path):
-        self.seen.append(repo_path)
+    async def addendum_for(self, root_paths):
+        self.seen.append(root_paths)
         return self.addendum
 
 
 class RaisingMemory:
-    async def addendum_for(self, repo_path):
+    async def addendum_for(self, root_paths):
         raise RuntimeError("probe exploded")
 
 
@@ -90,7 +90,7 @@ async def test_spawn_passes_addendum_for_the_parent_repo(tmp_path):
 
     assert captured["append_system_prompt"] == "## Memory\nrecall\n"
     # The parent repo, NOT the worktree: a fact must outlive a killed task.
-    assert mem.seen == [tmp_path / "repos" / "skep"]
+    assert mem.seen == [[tmp_path / "repos" / "skep"]]
     assert captured["cwd"] != tmp_path / "repos" / "skep"
 
 
@@ -222,6 +222,7 @@ async def test_shim_is_pointed_at_the_parent_repo_not_the_worktree(tmp_path):
     captured = {}
     await _sup(tmp_path, StubMemory(), captured).spawn("skep", "do it")
     args = captured["mcp_servers"]["memory"]["args"]
-    # The repo path arrives as argv, so the agent cannot redirect the write.
-    assert args[-1] == str(tmp_path / "repos" / "skep")
-    assert args[-1] != str(captured["cwd"])
+    # The repo path arrives as argv (embedded in a name=path pair), so the
+    # agent cannot redirect the write.
+    assert args[-1] == f"skep={tmp_path / 'repos' / 'skep'}"
+    assert args[-1] != f"skep={captured['cwd']}"

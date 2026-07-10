@@ -10,14 +10,18 @@ def _clock(iso: str = "2026-07-09T14:22:03Z"):
 
 
 def test_write_creates_dir_and_returns_path(tmp_path):
-    p = write_memory(tmp_path, "Stack takes 90s", "poll /healthz", now=_clock())
+    p = write_memory(
+        {"repo": tmp_path}, None, "Stack takes 90s", "poll /healthz", now=_clock()
+    )
     assert p == tmp_path / ".agent-memory" / "stack-takes-90s.md"
     assert p.exists()
 
 
 def test_written_fact_is_always_readable(tmp_path):
     # The property §6's skip-on-malformed rule would otherwise hide.
-    p = write_memory(tmp_path, 'Gotcha: he said "run \\ now"', "b", now=_clock())
+    p = write_memory(
+        {"repo": tmp_path}, None, 'Gotcha: he said "run \\ now"', "b", now=_clock()
+    )
     fact = parse_fact(p.stem, p.read_text())
     assert fact is not None
     assert fact.title == 'Gotcha: he said "run \\ now"'
@@ -26,33 +30,38 @@ def test_written_fact_is_always_readable(tmp_path):
 
 def test_newline_in_title_rejected(tmp_path):
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "two\nlines", "b", now=_clock())
+        write_memory({"repo": tmp_path}, None, "two\nlines", "b", now=_clock())
 
 
 def test_unknown_kind_rejected(tmp_path):
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "T", "b", kind="rumour", now=_clock())
+        write_memory({"repo": tmp_path}, None, "T", "b", kind="rumour", now=_clock())
 
 
 def test_collision_gets_suffix_not_overwrite(tmp_path):
-    a = write_memory(tmp_path, "Same Title", "first", now=_clock())
-    b = write_memory(tmp_path, "Same Title", "second", now=_clock())
+    a = write_memory({"repo": tmp_path}, None, "Same Title", "first", now=_clock())
+    b = write_memory({"repo": tmp_path}, None, "Same Title", "second", now=_clock())
     assert a.name == "same-title.md"
     assert b.name == "same-title-2.md"
     assert "first" in a.read_text()
 
 
 def test_third_collision_gets_three(tmp_path):
-    write_memory(tmp_path, "T", "1", now=_clock())
-    write_memory(tmp_path, "T", "2", now=_clock())
-    c = write_memory(tmp_path, "T", "3", now=_clock())
+    write_memory({"repo": tmp_path}, None, "T", "1", now=_clock())
+    write_memory({"repo": tmp_path}, None, "T", "2", now=_clock())
+    c = write_memory({"repo": tmp_path}, None, "T", "3", now=_clock())
     assert c.name == "t-3.md"
 
 
 def test_supersedes_marks_old_and_leaves_it_on_disk(tmp_path):
-    old = write_memory(tmp_path, "Old fact", "stale", now=_clock())
+    old = write_memory({"repo": tmp_path}, None, "Old fact", "stale", now=_clock())
     new = write_memory(
-        tmp_path, "New fact", "fresh", supersedes="old-fact", now=_clock()
+        {"repo": tmp_path},
+        None,
+        "New fact",
+        "fresh",
+        supersedes="old-fact",
+        now=_clock(),
     )
     old_fact = parse_fact(old.stem, old.read_text())
     assert old_fact.superseded_by == new.stem
@@ -60,9 +69,16 @@ def test_supersedes_marks_old_and_leaves_it_on_disk(tmp_path):
 
 
 async def test_superseded_fact_stops_being_injected(tmp_path):
-    write_memory(tmp_path, "Old fact", "stale", now=_clock())
-    write_memory(tmp_path, "New fact", "fresh", supersedes="old-fact", now=_clock())
-    out = await MemoryStore().addendum_for(tmp_path)
+    write_memory({"repo": tmp_path}, None, "Old fact", "stale", now=_clock())
+    write_memory(
+        {"repo": tmp_path},
+        None,
+        "New fact",
+        "fresh",
+        supersedes="old-fact",
+        now=_clock(),
+    )
+    out = await MemoryStore().addendum_for([tmp_path])
     assert "[old-fact]" not in out
     assert "[new-fact]" in out
 
@@ -70,13 +86,27 @@ async def test_superseded_fact_stops_being_injected(tmp_path):
 def test_supersedes_nonexistent_is_rejected(tmp_path):
     # Creating a memory by superseding it is not a thing.
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "New", "b", supersedes="never-existed", now=_clock())
+        write_memory(
+            {"repo": tmp_path},
+            None,
+            "New",
+            "b",
+            supersedes="never-existed",
+            now=_clock(),
+        )
     assert not (tmp_path / ".agent-memory" / "never-existed.md").exists()
 
 
 def test_supersedes_rejection_writes_nothing(tmp_path):
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "New", "b", supersedes="never-existed", now=_clock())
+        write_memory(
+            {"repo": tmp_path},
+            None,
+            "New",
+            "b",
+            supersedes="never-existed",
+            now=_clock(),
+        )
     assert not (tmp_path / ".agent-memory" / "new.md").exists()
 
 
@@ -106,7 +136,7 @@ def test_title_path_traversal_neutralized_and_contained(tmp_path, evil, expected
     property to check is that the write lands inside `.agent-memory/` and
     that the traversal target is never touched.
     """
-    p = write_memory(tmp_path, evil, "b", now=_clock())
+    p = write_memory({"repo": tmp_path}, None, evil, "b", now=_clock())
     assert p.parent == memory_dir(tmp_path).resolve()
     assert p.name == f"{expected_slug}.md"
     assert not (tmp_path.parent / ".ssh").exists()
@@ -118,24 +148,28 @@ def test_title_path_traversal_rejected_outright(tmp_path, evil):
     genuinely rejected, not merely neutralized.
     """
     with pytest.raises(ValueError):
-        write_memory(tmp_path, evil, "b", now=_clock())
+        write_memory({"repo": tmp_path}, None, evil, "b", now=_clock())
     assert not (tmp_path.parent / ".ssh").exists()
 
 
 @pytest.mark.parametrize("evil", EVIL)
 def test_supersedes_path_traversal_rejected(tmp_path, evil):
-    write_memory(tmp_path, "Anchor", "b", now=_clock())
+    write_memory({"repo": tmp_path}, None, "Anchor", "b", now=_clock())
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "New", "b", supersedes=evil, now=_clock())
+        write_memory(
+            {"repo": tmp_path}, None, "New", "b", supersedes=evil, now=_clock()
+        )
 
 
 def test_supersedes_does_not_escape_via_symlink(tmp_path):
-    write_memory(tmp_path, "Anchor", "b", now=_clock())
+    write_memory({"repo": tmp_path}, None, "Anchor", "b", now=_clock())
     outside = tmp_path / "outside.md"
     outside.write_text("do not touch")
     (tmp_path / ".agent-memory" / "sneaky.md").symlink_to(outside)
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "New", "b", supersedes="sneaky", now=_clock())
+        write_memory(
+            {"repo": tmp_path}, None, "New", "b", supersedes="sneaky", now=_clock()
+        )
     assert outside.read_text() == "do not touch"
 
 
@@ -152,7 +186,7 @@ def test_title_does_not_escape_via_symlink(tmp_path):
     (tmp_path / ".agent-memory").mkdir()
     (tmp_path / ".agent-memory" / "new.md").symlink_to(outside)
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "New", "b", now=_clock())
+        write_memory({"repo": tmp_path}, None, "New", "b", now=_clock())
     assert outside.read_text() == "do not touch"
 
 
@@ -168,10 +202,10 @@ def test_title_collision_suffix_does_not_escape_via_symlink(tmp_path):
     store (a broken symlink so `Path.exists()` reports it as free, letting
     `_next_free` select it as the write target).
     """
-    write_memory(tmp_path, "New", "first", now=_clock())
+    write_memory({"repo": tmp_path}, None, "New", "first", now=_clock())
     outside = tmp_path / "outside.md"
     assert not outside.exists()
     (tmp_path / ".agent-memory" / "new-2.md").symlink_to(outside)
     with pytest.raises(ValueError):
-        write_memory(tmp_path, "New", "second", now=_clock())
+        write_memory({"repo": tmp_path}, None, "New", "second", now=_clock())
     assert not outside.exists()

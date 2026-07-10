@@ -108,7 +108,7 @@ class Supervisor:
                 # survive task failure and branch abandonment.
                 if self._memory is not None:
                     try:
-                        addendum = await self._memory.addendum_for(repo_path)
+                        addendum = await self._memory.addendum_for([repo_path])
                     except Exception as exc:
                         self._reg.log_audit(tid, "error", f"memory read failed: {exc}")
                         addendum = None
@@ -117,7 +117,7 @@ class Supervisor:
                 # The shim is a stdio subprocess of `claude`, not of skep: no
                 # start(), no _shims entry, no teardown, no leak on a failed
                 # spawn (spec §5.2).
-                mcp_servers["memory"] = memory_shim_server(repo_path)
+                mcp_servers["memory"] = memory_shim_server([(repo, repo_path)])
                 allowed_tools += MEMORY_TOOLS
 
             if self._mailbox_client is not None:
