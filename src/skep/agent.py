@@ -9,9 +9,46 @@ from pathlib import Path
 
 from skep.stream import Event, parse_event
 
+_CORE_ENV_KEYS = (
+    "PATH", "HOME", "USER", "LOGNAME", "TERM", "LANG", "TZ", "SHELL",
+)
+# Kept only if present. Proxy vars matter because dropping HTTPS_PROXY on a
+# proxied host kills the API and dropping NO_PROXY=127.0.0.1 sends the loopback
+# shim call through the proxy. Spec 5.1 anticipates this set growing via spike (a).
+_OPTIONAL_ENV_KEYS = (
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NIX_SSL_CERT_FILE", "LOCALE_ARCHIVE",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+)
 
-def _agent_env(config_dir: str | None) -> dict[str, str]:
-    env = dict(os.environ)
+
+def _agent_env(config_dir: str | None, *,
+               passthrough: tuple[str, ...] = ()) -> dict[str, str]:
+    """Build a default-drop allowlisted environment for a spawned agent.
+
+    Scrubs the worker's own environment -- critically the entire SKEP_*
+    namespace (SKEP_SHARED_SECRET, SKEP_DB), CLAUDE_CODE_*/CLAUDECODE session
+    markers, and ANTHROPIC_* -- so a compromised agent cannot read them from
+    its OWN environ. This does NOT stop a same-UID sibling reading the worker's
+    /proc/<pid>/environ; that cross-process pivot closes only with L0.2
+    Increment 2's PID namespace. Surface reduction, not full containment.
+
+    CLAUDE_CONFIG_DIR is set explicitly from config_dir and never inherited.
+    """
+    src = os.environ
+    env: dict[str, str] = {}
+    for key in _CORE_ENV_KEYS:
+        if key in src:
+            env[key] = src[key]
+    for key, val in src.items():
+        if key.startswith("LC_"):
+            env[key] = val
+    for key in _OPTIONAL_ENV_KEYS:
+        if key in src:
+            env[key] = src[key]
+    for key in passthrough:
+        if key in src:
+            env[key] = src[key]
     if config_dir is not None:
         env["CLAUDE_CONFIG_DIR"] = config_dir
     return env
@@ -49,6 +86,7 @@ class AgentProcess:
         add_dirs: list[Path] | None = None,
         model: str | None = None,
         resume_token: str | None = None,
+        env_passthrough: tuple[str, ...] = (),
     ) -> None:
         self._task_text = task_text
         self._cwd = cwd
@@ -60,6 +98,7 @@ class AgentProcess:
         self._add_dirs = add_dirs
         self._model = model
         self._resume_token = resume_token
+        self._env_passthrough = env_passthrough
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr: bytes = b""
         self._stderr_task: asyncio.Task | None = None
@@ -115,7 +154,7 @@ class AgentProcess:
         self._proc = await asyncio.create_subprocess_exec(
             *self._argv(),
             cwd=str(self._cwd),
-            env=_agent_env(self._config_dir),
+            env=_agent_env(self._config_dir, passthrough=self._env_passthrough),
             # Phase 1 writes no stdin; DEVNULL gives immediate EOF, avoiding
             # claude's 3s "no stdin data" stall. Phase 2 (soft-steer) will
             # need PIPE to write follow-up input.

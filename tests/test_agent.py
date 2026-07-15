@@ -73,3 +73,54 @@ def test_argv_omits_new_flags_by_default(tmp_path):
     assert "--add-dir" not in argv
     assert "--model" not in argv
     assert "--resume" not in argv
+
+
+def test_agent_env_drops_secrets_and_session_markers(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("SKEP_SHARED_SECRET", "hunter2")
+    monkeypatch.setenv("SKEP_DB", "/var/skep.sqlite")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-nope")
+    env = _agent_env("/home/me/.claude-work")
+    assert "SKEP_SHARED_SECRET" not in env
+    assert "SKEP_DB" not in env
+    assert "CLAUDE_CODE_ENTRYPOINT" not in env
+    assert "CLAUDECODE" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert env["PATH"] == "/usr/bin"
+    assert env["CLAUDE_CONFIG_DIR"] == "/home/me/.claude-work"
+
+
+def test_agent_env_keeps_lc_and_optional_when_present(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/cert.pem")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    env = _agent_env(None)
+    assert env["LC_ALL"] == "en_US.UTF-8"
+    assert env["SSL_CERT_FILE"] == "/etc/ssl/cert.pem"
+    assert env["NO_PROXY"] == "127.0.0.1"
+
+
+def test_agent_env_never_inherits_config_dir_when_none(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/worker/own/cfg")
+    env = _agent_env(None)
+    assert "CLAUDE_CONFIG_DIR" not in env  # worker identity must not leak
+
+
+def test_agent_env_honors_passthrough(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("MY_HOST_VAR", "keepme")
+    monkeypatch.setenv("SKEP_SHARED_SECRET", "hunter2")
+    env = _agent_env(None, passthrough=("MY_HOST_VAR",))
+    assert env["MY_HOST_VAR"] == "keepme"
+    assert "SKEP_SHARED_SECRET" not in env  # passthrough doesn't reopen the namespace
+
+
+def test_agent_env_passthrough_missing_key_is_noop(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.delenv("NOT_SET_ANYWHERE", raising=False)
+    env = _agent_env(None, passthrough=("NOT_SET_ANYWHERE",))
+    assert "NOT_SET_ANYWHERE" not in env
