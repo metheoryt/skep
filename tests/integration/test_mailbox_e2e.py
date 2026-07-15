@@ -13,6 +13,7 @@ async def test_agent_can_send_via_mcp_shim(tmp_path):
     """Real claude -> --mcp-config -> live MailboxShim -> mailbox store."""
     from skep.queen.mailbox import Mailbox, MailboxService
     from skep.transport import InMemoryMailboxClient
+    from skep.worker.mcp_config import write_mcp_config
     from skep.worker.mcp_shim import MailboxShim
     from skep.agent import AgentProcess
 
@@ -34,11 +35,13 @@ async def test_agent_can_send_via_mcp_shim(tmp_path):
     shim = MailboxShim(client, tid=1)
     url = await shim.start()
     try:
+        servers = {"mailbox": {"type": "http", "url": url}}
+        cfg_path = write_mcp_config(tmp_path, servers)
         agent = AgentProcess(
             "Use the send_message tool to send to 'ceo' with subject 'hi' "
             "and body 'from agent', then stop.",
             str(tmp_path), "claude",
-            mcp_servers={"mailbox": {"type": "http", "url": url}})
+            mcp_config_path=str(cfg_path))
         await agent.start()
         # Drain stdout events; this awaits subprocess exit internally.
         async for _event in agent.events():

@@ -28,11 +28,12 @@ def _require_bearer(app: Any, token: str) -> Any:
 
     Raises the bar against a process that discovers another agent's ephemeral
     shim port: merely connecting no longer suffices -- the caller must present
-    the per-agent token. NOTE: the token is currently handed to the agent on
-    its command line (--mcp-config), so a SAME-UID sibling that reads
-    /proc/<pid>/cmdline can still recover it; true per-agent isolation needs
-    separate UIDs / a sandbox (tracked as an L0.2 follow-up). This guard is
-    defense-in-depth that becomes fully effective under that isolation.
+    the per-agent token. The token now rides a 0600 --mcp-config file in the
+    agent's worktree, so it is OFF the command line (not in /proc/<pid>/cmdline
+    or `ps`); this guard therefore stops a different-UID or remote caller. A
+    SAME-UID sibling can still read that 0600 file (same owner) and the
+    worker's /proc/<worker-pid>/environ; full same-UID isolation arrives with
+    L0.2 Increment 2's PID/mount namespaces.
     """
     expected = f"Bearer {token}".encode()
 

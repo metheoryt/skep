@@ -7,6 +7,13 @@ from skep.db import Registry
 from skep.supervisor import Supervisor
 
 
+def _fake_writer_factory(recorder):
+    def _writer(worktree, mcp_servers):
+        recorder.append((worktree, mcp_servers))
+        return worktree / ".skep" / "mcp.json"
+    return _writer
+
+
 def _cfg(tmp_path, max_concurrent=8):
     return WorkerConfig(
         host="g16", profile="work", claude_config_dir="/cfg",
@@ -17,16 +24,17 @@ def _cfg(tmp_path, max_concurrent=8):
 
 class FakeAgent:
     def __init__(self, task_text, cwd, claude_bin, config_dir=None,
-                 mcp_servers=None, allowed_tools=None,
-                 add_dirs=None, model=None):
+                 mcp_config_path=None, allowed_tools=None,
+                 add_dirs=None, model=None, env_passthrough=()):
         self.task_text = task_text
         self.cwd = cwd
         self.claude_bin = claude_bin
         self.config_dir = config_dir
-        self.mcp_servers = mcp_servers
+        self.mcp_config_path = mcp_config_path
         self.allowed_tools = allowed_tools
         self.add_dirs = add_dirs
         self.model = model
+        self.env_passthrough = env_passthrough
         self.pid = 123
         self.killed = False
         self.started = False
@@ -109,6 +117,7 @@ async def test_spawn_starts_shim_and_passes_mcp_url(tmp_path):
     sink = RecordingSink()
     captured = {}
     shims = []
+    writes = []
 
     def agent_factory(**kwargs):
         captured.update(kwargs)
@@ -123,19 +132,22 @@ async def test_spawn_starts_shim_and_passes_mcp_url(tmp_path):
         cfg, reg, sink, agent_factory=agent_factory,
         worktree_factory=lambda *a, **k: None,
         mailbox_client=FakeMailboxClient(), shim_factory=shim_factory,
+        mcp_config_writer=_fake_writer_factory(writes),
     )
     tid = await sup.spawn("nix", "clean nvidia")
 
     assert len(shims) == 1
     assert shims[0].started
     assert shims[0].tid == tid
-    server = captured["mcp_servers"]["mailbox"]
+    assert len(writes) == 1
+    written_worktree, written_servers = writes[0]
+    server = written_servers["mailbox"]
     assert server["url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
-    # a per-agent bearer token is generated and handed to BOTH the shim (to
-    # enforce) and the agent (to present) -- and they must match.
     token = server["headers"]["Authorization"].removeprefix("Bearer ")
     assert isinstance(token, str) and token
-    assert token == shims[0].token
+    assert token == shims[0].token  # shim enforces the same token
+    assert captured["mcp_config_path"] == str(written_worktree / ".skep" / "mcp.json")
+    assert "mcp_servers" not in captured  # map never reaches the agent kwargs
     assert sup._shims[tid] is shims[0]
 
     # let the background run_events task drain and stop the shim.
@@ -151,6 +163,7 @@ async def test_spawn_without_mailbox_client_passes_no_mcp_url(tmp_path):
     reg = Registry.open(":memory:")
     sink = RecordingSink()
     captured = {}
+    writes = []
 
     def agent_factory(**kwargs):
         captured.update(kwargs)
@@ -159,11 +172,15 @@ async def test_spawn_without_mailbox_client_passes_no_mcp_url(tmp_path):
     sup = Supervisor(
         cfg, reg, sink, agent_factory=agent_factory,
         worktree_factory=lambda *a, **k: None,
+        mcp_config_writer=_fake_writer_factory(writes),
     )
     await sup.spawn("nix", "clean nvidia")
 
-    # no shim path taken: the server map carries no mailbox entry
-    assert "mailbox" not in (captured.get("mcp_servers") or {})
+    # no mailbox entry in the written map; memory-only map still written
+    assert len(writes) == 1
+    _, written_servers = writes[0]
+    assert "mailbox" not in written_servers
+    assert "mcp_servers" not in captured
     assert sup._shims == {}
 
 
@@ -182,14 +199,15 @@ async def test_existing_agent_factory_signature_unaffected_when_no_mailbox(tmp_p
     captured = {}
 
     def agent_factory(task_text, cwd, claude_bin, config_dir=None,
-                       mcp_servers=None, allowed_tools=None,
-                       add_dirs=None, model=None):
+                       mcp_config_path=None, allowed_tools=None,
+                       add_dirs=None, model=None, env_passthrough=()):
         captured["config_dir"] = config_dir
         return FakeAgent(task_text, cwd, claude_bin, config_dir)
 
     sup = Supervisor(
         cfg, reg, sink, agent_factory=agent_factory,
         worktree_factory=lambda *a, **k: None,
+        mcp_config_writer=_fake_writer_factory([]),
     )
     tid = await sup.spawn("nix", "clean nvidia")
     assert captured["config_dir"] == "/cfg"
@@ -229,6 +247,7 @@ async def test_kill_leads_to_shim_stop(tmp_path):
         cfg, reg, sink, agent_factory=lambda **k: BlockingAgent(**k),
         worktree_factory=lambda *a, **k: None,
         mailbox_client=FakeMailboxClient(), shim_factory=shim_factory,
+        mcp_config_writer=_fake_writer_factory([]),
     )
     tid = await sup.spawn("nix", "clean nvidia")
 
@@ -263,6 +282,7 @@ async def test_spawn_agent_start_failure_stops_shim(tmp_path):
         cfg, reg, sink, agent_factory=agent_factory,
         worktree_factory=lambda *a, **k: None,
         mailbox_client=FakeMailboxClient(), shim_factory=shim_factory,
+        mcp_config_writer=_fake_writer_factory([]),
     )
 
     try:
@@ -315,6 +335,7 @@ async def test_spawn_sink_failure_stops_shim_and_agent(tmp_path):
         cfg, reg, sink=FailingSink(), agent_factory=agent_factory,
         worktree_factory=lambda *a, **k: None,
         mailbox_client=FakeMailboxClient(), shim_factory=shim_factory,
+        mcp_config_writer=_fake_writer_factory([]),
     )
 
     try:

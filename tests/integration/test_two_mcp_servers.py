@@ -24,6 +24,7 @@ async def test_stdio_memory_and_http_mailbox_both_resolve(tmp_path):
     """
     from skep.agent import AgentProcess
     from skep.supervisor import BASE_TOOLS, MAILBOX_TOOLS
+    from skep.worker.mcp_config import write_mcp_config
     from skep.worker.mcp_shim import MailboxShim
     from skep.worker.memory_shim import MEMORY_TOOLS, memory_shim_server
 
@@ -51,6 +52,15 @@ async def test_stdio_memory_and_http_mailbox_both_resolve(tmp_path):
     shim = MailboxShim(client, tid=1, token=token)
     url = await shim.start()
     try:
+        servers = {
+            "memory": memory_shim_server([("repo", repo)]),
+            "mailbox": {
+                "type": "http",
+                "url": url,
+                "headers": {"Authorization": f"Bearer {token}"},
+            },
+        }
+        cfg_path = write_mcp_config(wt, servers)
         agent = AgentProcess(
             task_text=(
                 "Do both, then reply DONE. "
@@ -60,14 +70,7 @@ async def test_stdio_memory_and_http_mailbox_both_resolve(tmp_path):
             ),
             cwd=wt,
             claude_bin="claude",
-            mcp_servers={
-                "memory": memory_shim_server([("repo", repo)]),
-                "mailbox": {
-                    "type": "http",
-                    "url": url,
-                    "headers": {"Authorization": f"Bearer {token}"},
-                },
-            },
+            mcp_config_path=str(cfg_path),
             allowed_tools=[*BASE_TOOLS, *MEMORY_TOOLS, *MAILBOX_TOOLS],
         )
         await agent.start()
