@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import shlex
 from collections.abc import AsyncIterator
@@ -83,7 +82,6 @@ class AgentProcess:
         claude_bin: str,
         config_dir: str | None = None,
         mcp_config_path: str | None = None,
-        mcp_servers: dict[str, dict] | None = None,
         allowed_tools: list[str] | None = None,
         append_system_prompt: str | None = None,
         add_dirs: list[Path] | None = None,
@@ -96,7 +94,6 @@ class AgentProcess:
         self._claude_bin = claude_bin
         self._config_dir = config_dir
         self._mcp_config_path = mcp_config_path
-        self._mcp_servers = mcp_servers
         self._allowed_tools = allowed_tools
         self._append_system_prompt = append_system_prompt
         self._add_dirs = add_dirs
@@ -129,8 +126,6 @@ class AgentProcess:
             # The token rides the 0600 file, NOT argv (L0.2 §5.2). No
             # --strict-mcp-config: the agent keeps its profile MCP servers.
             argv += ["--mcp-config", self._mcp_config_path]
-        elif self._mcp_servers:
-            argv += ["--mcp-config", json.dumps({"mcpServers": self._mcp_servers})]
         if self._allowed_tools:
             # Comma-joined single token: the form verified by the §2.4 probe.
             # The enumeration must be COMPLETE -- skep never relies on a host
