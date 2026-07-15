@@ -5,6 +5,36 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 ## Decisions
 
+- **L0.2 Increment 1 DONE (2026-07-16, branch `feat/skep-l0.2-increment1`,
+  re-planned against current main after the abandoned
+  `feat/skep-l0.2-per-agent-isolation` went stale under 54 commits of L1.1 +
+  Sessions).** Two surface-reduction mechanisms for spawned agents: (1) **env
+  hygiene** — `agent._agent_env` is now a **default-drop allowlist**
+  (`_CORE_ENV_KEYS`=PATH,HOME,USER,LOGNAME,TERM,LANG,TZ,SHELL + all `LC_*` +
+  `_OPTIONAL_ENV_KEYS`=SSL_CERT_*/NIX_SSL_CERT_FILE/LOCALE_ARCHIVE/*_PROXY/
+  NO_PROXY + lowercase), replacing `dict(os.environ)`; drops the whole `SKEP_*`
+  namespace, `ANTHROPIC_*`, `CLAUDE_CODE_*`/`CLAUDECODE`; `CLAUDE_CONFIG_DIR` set
+  from the arg only. Opt-in widen via `SKEP_AGENT_ENV_PASSTHROUGH` →
+  `WorkerConfig.agent_env_passthrough` (bypasses the drop-list — never list a
+  secret). (2) **token off argv** — the whole N-server MCP map (mailbox http+
+  bearer + memory stdio) is written to a `0600` `<worktree>/.skep/mcp.json` via
+  the new `worker/mcp_config.py::write_mcp_config` (fchmod-before-write; git-
+  info/exclude'd) and passed as `--mcp-config <path>`; the per-agent bearer no
+  longer rides `/proc/<pid>/cmdline`. Injectable `Supervisor(mcp_config_writer=)`
+  seam. **Empirically confirmed on real claude (~/.claude, this host):** spike
+  (a) scrubbed-env auth + Bash-tool completion PASS (keep-set SUFFICIENT, no
+  widening; dropping ANTHROPIC_* is safe — agents auth from the profile), and
+  token-off-argv + memory-stdio-under-scrubbed-env e2e PASS. **Honest residual:**
+  closes only the different-UID / other-local-user vector (cmdline is world-
+  readable). A **same-UID sibling** can still read the worker's
+  `/proc/<worker-pid>/environ` OR the 0600 file (same owner) — full same-UID
+  containment awaits **Increment 2's PID/mount namespaces**. **FOLLOW-UP for
+  attach/primary (Increment 2 / A2):** `.skep/mcp.json` has a FIXED filename;
+  fine today (only `MODE_NEW` roots exist, tid-unique worktrees), but concurrent
+  agents against a shared persistent repo would clobber each other's token file
+  → silent 401. Must become tid-keyed (`mcp-<tid>.json`) before attach/primary
+  roots go live (documented at the write site in `supervisor.py`).
+
 - **Agent memory is tracked repo files** (`<repo>/.agent-memory/*.md`, one fact
   per file), read into the spawn addendum for free and written through a stdio
   `remember` MCP tool. Supersedes L1's gortex-daemon store, deleted 2026-07-09.
