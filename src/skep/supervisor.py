@@ -167,6 +167,13 @@ class Supervisor:
 
             if mcp_servers:
                 # The token (in the mailbox entry) rides a 0600 file, not argv.
+                # NOTE: the filename is a fixed `.skep/mcp.json` under head_path.
+                # For a MODE_NEW head that path is tid-unique, so the file is
+                # per-agent. For an attach/primary head (persistent shared repo,
+                # not yet wired -- Increment 2 / A2) it is single-writer-per-root:
+                # concurrent spawns would clobber each other's token file. It
+                # MUST become tid-keyed (e.g. mcp-<tid>.json) before attach/
+                # primary roots go live.
                 mcp_config_path = self._mcp_config_writer(head_path, mcp_servers)
                 agent_kwargs["mcp_config_path"] = str(mcp_config_path)
             agent_kwargs["allowed_tools"] = allowed_tools

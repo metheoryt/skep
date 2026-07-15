@@ -27,6 +27,9 @@ class WorkerConfig:
     claude_bin: str = "claude"
     memory_enabled: bool = True
     memory_max_bytes: int = 8192
+    # Extra env keys to pass through to spawned agents. WARNING: passthrough
+    # bypasses agent._agent_env's default-drop allowlist -- never list a secret
+    # (SKEP_*/ANTHROPIC_*/etc.) here.
     agent_env_passthrough: tuple[str, ...] = ()
 
 
