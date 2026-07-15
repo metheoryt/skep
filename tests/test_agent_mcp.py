@@ -89,3 +89,20 @@ def test_append_system_prompt_coexists_with_mcp_config_and_grant():
     )
     assert argv[argv.index("--append-system-prompt") + 1] == "## Memory"
     assert "--mcp-config" in argv and "--allowedTools" in argv
+
+
+def test_mcp_config_path_preferred_over_inline_servers():
+    argv = _argv(mcp_config_path="/wt/.skep/mcp.json",
+                 mcp_servers={"mailbox": _mailbox()})
+    i = argv.index("--mcp-config")
+    assert argv[i + 1] == "/wt/.skep/mcp.json"
+    assert "--strict-mcp-config" not in argv
+
+
+def test_token_and_url_never_appear_in_argv_with_path():
+    argv = _argv(mcp_config_path="/wt/.skep/mcp.json",
+                 mcp_servers={"mailbox": _mailbox()})
+    joined = " ".join(argv)
+    assert "Bearer" not in joined
+    assert "http://" not in joined
+    assert "127.0.0.1" not in joined

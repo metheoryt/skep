@@ -82,6 +82,7 @@ class AgentProcess:
         cwd: Path,
         claude_bin: str,
         config_dir: str | None = None,
+        mcp_config_path: str | None = None,
         mcp_servers: dict[str, dict] | None = None,
         allowed_tools: list[str] | None = None,
         append_system_prompt: str | None = None,
@@ -94,6 +95,7 @@ class AgentProcess:
         self._cwd = cwd
         self._claude_bin = claude_bin
         self._config_dir = config_dir
+        self._mcp_config_path = mcp_config_path
         self._mcp_servers = mcp_servers
         self._allowed_tools = allowed_tools
         self._append_system_prompt = append_system_prompt
@@ -123,7 +125,11 @@ class AgentProcess:
         ]
         if self._append_system_prompt is not None:
             argv += ["--append-system-prompt", self._append_system_prompt]
-        if self._mcp_servers:
+        if self._mcp_config_path is not None:
+            # The token rides the 0600 file, NOT argv (L0.2 §5.2). No
+            # --strict-mcp-config: the agent keeps its profile MCP servers.
+            argv += ["--mcp-config", self._mcp_config_path]
+        elif self._mcp_servers:
             argv += ["--mcp-config", json.dumps({"mcpServers": self._mcp_servers})]
         if self._allowed_tools:
             # Comma-joined single token: the form verified by the §2.4 probe.
