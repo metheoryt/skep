@@ -27,6 +27,7 @@ class WorkerConfig:
     claude_bin: str = "claude"
     memory_enabled: bool = True
     memory_max_bytes: int = 8192
+    agent_env_passthrough: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,10 @@ class QueenConfig:
 
 
 def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
+    passthrough_raw = env.get("SKEP_AGENT_ENV_PASSTHROUGH", "")
+    agent_env_passthrough = tuple(
+        k.strip() for k in passthrough_raw.split(",") if k.strip()
+    )
     return WorkerConfig(
         host=env.get("SKEP_HOST") or socket.gethostname(),
         profile=env.get("SKEP_PROFILE", "default"),
@@ -66,6 +71,7 @@ def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
         claude_bin=env.get("SKEP_CLAUDE_BIN", "claude"),
         memory_enabled=_as_bool(env.get("SKEP_MEMORY_ENABLED"), True),
         memory_max_bytes=int(env.get("SKEP_MEMORY_MAX_BYTES", "8192")),
+        agent_env_passthrough=agent_env_passthrough,
     )
 
 

@@ -174,3 +174,18 @@ def test_memory_max_bytes_defaults_8192():
 def test_memory_max_bytes_override():
     env = _worker_env() | {"SKEP_MEMORY_MAX_BYTES": "4096"}
     assert load_worker_config(env).memory_max_bytes == 4096
+
+
+def test_worker_config_agent_env_passthrough_parsed():
+    cfg = load_worker_config({
+        "SKEP_REPOS_ROOT": "/r", "SKEP_WORKTREES_ROOT": "/w", "SKEP_DB": ":memory:",
+        "SKEP_AGENT_ENV_PASSTHROUGH": "FOO, BAR ,,BAZ",
+    })
+    assert cfg.agent_env_passthrough == ("FOO", "BAR", "BAZ")
+
+
+def test_worker_config_agent_env_passthrough_defaults_empty():
+    cfg = load_worker_config({
+        "SKEP_REPOS_ROOT": "/r", "SKEP_WORKTREES_ROOT": "/w", "SKEP_DB": ":memory:",
+    })
+    assert cfg.agent_env_passthrough == ()
