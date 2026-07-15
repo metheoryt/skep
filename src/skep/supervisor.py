@@ -13,6 +13,7 @@ from skep.db import Registry, Task
 from skep.formatting import activity_line, milestone_message
 from skep.memory import MemoryProbe
 from skep.transport import EventSink, MailboxClient
+from skep.worker.mcp_config import write_mcp_config
 from skep.worker.mcp_shim import MailboxShim
 from skep.worker.memory_shim import MEMORY_TOOLS, memory_shim_server
 from skep.workspace import MODE_NEW, Workspace
@@ -57,6 +58,7 @@ class Supervisor:
         mailbox_client: MailboxClient | None = None,
         shim_factory: Callable[..., MailboxShim] = MailboxShim,
         memory: MemoryProbe | None = None,
+        mcp_config_writer: Callable[[Path, dict], Path] = write_mcp_config,
     ) -> None:
         self._cfg = config
         self._reg = registry
@@ -66,6 +68,7 @@ class Supervisor:
         self._mailbox_client = mailbox_client
         self._shim_factory = shim_factory
         self._memory = memory
+        self._mcp_config_writer = mcp_config_writer
         self._agents: dict[int, AgentProcess] = {}
         self._shims: dict[int, MailboxShim] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -120,6 +123,8 @@ class Supervisor:
                 add_dirs=add_dirs,
                 model=model,
             )
+            if self._cfg.agent_env_passthrough:
+                agent_kwargs["env_passthrough"] = self._cfg.agent_env_passthrough
             mcp_servers: dict[str, dict] = {}
             allowed_tools: list[str] = list(BASE_TOOLS)
 
@@ -148,10 +153,10 @@ class Supervisor:
 
             if self._mailbox_client is not None:
                 # Per-agent bearer token: the shim enforces it, the agent
-                # presents it via --mcp-config. Defeats a passive
-                # port-scan-and-connect from another local process; a same-UID
-                # sibling that reads this agent's argv can still recover it
-                # (true isolation needs per-agent UIDs -- L0.2 follow-up).
+                # presents it via a 0600 --mcp-config file (token OFF argv, so
+                # off /proc/<pid>/cmdline and `ps`). A same-UID sibling can
+                # still read that file (same owner) or the worker's environ --
+                # true isolation needs Increment 2's namespaces.
                 token = secrets.token_urlsafe(32)
                 shim = self._shim_factory(self._mailbox_client, tid, token=token)
                 mcp_url = await shim.start()
@@ -161,7 +166,9 @@ class Supervisor:
                 allowed_tools += MAILBOX_TOOLS
 
             if mcp_servers:
-                agent_kwargs["mcp_servers"] = mcp_servers
+                # The token (in the mailbox entry) rides a 0600 file, not argv.
+                mcp_config_path = self._mcp_config_writer(head_path, mcp_servers)
+                agent_kwargs["mcp_config_path"] = str(mcp_config_path)
             agent_kwargs["allowed_tools"] = allowed_tools
 
             agent = self._agent_factory(**agent_kwargs)
@@ -236,6 +243,8 @@ class Supervisor:
                 resume_token=prev.resume_token,
                 allowed_tools=list(BASE_TOOLS),
             )
+            if self._cfg.agent_env_passthrough:
+                agent_kwargs["env_passthrough"] = self._cfg.agent_env_passthrough
             agent = self._agent_factory(**agent_kwargs)
             await agent.start()
             self._agents[tid] = agent

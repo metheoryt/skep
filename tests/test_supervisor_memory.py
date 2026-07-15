@@ -4,6 +4,13 @@ from skep.supervisor import BASE_TOOLS, MAILBOX_TOOLS, Supervisor
 from skep.worker.memory_shim import MEMORY_TOOLS
 
 
+def _fake_writer_factory(recorder):
+    def _writer(worktree, mcp_servers):
+        recorder.append((worktree, mcp_servers))
+        return worktree / ".skep" / "mcp.json"
+    return _writer
+
+
 def _cfg(tmp_path, memory_enabled=True):
     return WorkerConfig(
         host="g16", profile="work", claude_config_dir="/cfg",
@@ -68,7 +75,7 @@ class RaisingMemory:
         raise RuntimeError("probe exploded")
 
 
-def _sup(tmp_path, memory, captured, memory_enabled=True):
+def _sup(tmp_path, memory, captured, memory_enabled=True, writes=None):
     def agent_factory(**kwargs):
         captured.update(kwargs)
         return FakeAgent()
@@ -80,6 +87,7 @@ def _sup(tmp_path, memory, captured, memory_enabled=True):
         agent_factory=agent_factory,
         worktree_factory=lambda *a, **k: None,
         memory=memory,
+        mcp_config_writer=_fake_writer_factory(writes if writes is not None else []),
     )
 
 
@@ -140,7 +148,7 @@ class FakeMailboxClient:
     """Enough of MailboxClient for Supervisor to take the shim path."""
 
 
-def _sup_with_mailbox(tmp_path, captured):
+def _sup_with_mailbox(tmp_path, captured, writes=None):
     shims = []
 
     class FakeShim:
@@ -167,23 +175,28 @@ def _sup_with_mailbox(tmp_path, captured):
         mailbox_client=FakeMailboxClient(),
         shim_factory=FakeShim,
         memory=StubMemory(),
+        mcp_config_writer=_fake_writer_factory(writes if writes is not None else []),
     )
 
 
 async def test_memory_server_present_when_mailbox_is_off(tmp_path):
     captured = {}
-    await _sup(tmp_path, StubMemory(), captured).spawn("skep", "do it")
-    assert set(captured["mcp_servers"]) == {"memory"}
-    assert captured["mcp_servers"]["memory"]["type"] == "stdio"
+    writes = []
+    await _sup(tmp_path, StubMemory(), captured, writes=writes).spawn("skep", "do it")
+    _, written_servers = writes[0]
+    assert set(written_servers) == {"memory"}
+    assert written_servers["memory"]["type"] == "stdio"
     assert "mcp__memory__remember" in captured["allowed_tools"]
 
 
 async def test_both_servers_when_mailbox_is_on(tmp_path):
     captured = {}
-    await _sup_with_mailbox(tmp_path, captured).spawn("skep", "do it")
-    assert set(captured["mcp_servers"]) == {"memory", "mailbox"}
-    assert captured["mcp_servers"]["memory"]["type"] == "stdio"
-    assert captured["mcp_servers"]["mailbox"]["type"] == "http"
+    writes = []
+    await _sup_with_mailbox(tmp_path, captured, writes=writes).spawn("skep", "do it")
+    _, written_servers = writes[0]
+    assert set(written_servers) == {"memory", "mailbox"}
+    assert written_servers["memory"]["type"] == "stdio"
+    assert written_servers["mailbox"]["type"] == "http"
     # Pin the COMPOSED grant exactly, in assembly order (BASE, MEMORY, MAILBOX).
     # A loose `in` check would pass a widened assembly -- a stray "Read", a
     # wildcard, a duplicate. The grant is the security boundary; assert it whole.
@@ -192,9 +205,11 @@ async def test_both_servers_when_mailbox_is_on(tmp_path):
 
 async def test_memory_disabled_omits_server_and_grant(tmp_path):
     captured = {}
-    sup = _sup(tmp_path, StubMemory(), captured, memory_enabled=False)
+    writes = []
+    sup = _sup(tmp_path, StubMemory(), captured, memory_enabled=False, writes=writes)
     await sup.spawn("skep", "do it")
-    assert "memory" not in (captured.get("mcp_servers") or {})
+    # memory is the only source with mailbox off; disabled => no map => no write.
+    assert writes == []
     assert "mcp__memory__remember" not in captured["allowed_tools"]
     assert "append_system_prompt" not in captured
 
@@ -212,16 +227,20 @@ async def test_read_failure_still_yields_shim_and_grant(tmp_path):
     # spec §6: read failure does not disable writing. RaisingMemory already
     # exists in this file.
     captured = {}
-    await _sup(tmp_path, RaisingMemory(), captured).spawn("skep", "do it")
+    writes = []
+    await _sup(tmp_path, RaisingMemory(), captured, writes=writes).spawn("skep", "do it")
     assert "append_system_prompt" not in captured
-    assert "memory" in captured["mcp_servers"]
+    _, written_servers = writes[0]
+    assert "memory" in written_servers
     assert "mcp__memory__remember" in captured["allowed_tools"]
 
 
 async def test_shim_is_pointed_at_the_parent_repo_not_the_worktree(tmp_path):
     captured = {}
-    await _sup(tmp_path, StubMemory(), captured).spawn("skep", "do it")
-    args = captured["mcp_servers"]["memory"]["args"]
+    writes = []
+    await _sup(tmp_path, StubMemory(), captured, writes=writes).spawn("skep", "do it")
+    _, written_servers = writes[0]
+    args = written_servers["memory"]["args"]
     # The repo path arrives as argv (embedded in a name=path pair), so the
     # agent cannot redirect the write.
     assert args[-1] == f"skep={tmp_path / 'repos' / 'skep'}"

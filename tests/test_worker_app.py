@@ -45,9 +45,9 @@ def test_build_worker_activates_mailbox_end_to_end():
 
 async def test_build_worker_supervisor_starts_shim_on_spawn(tmp_path):
     """Behavioral proof: a REAL assembled worker (via build_worker) starts a
-    mailbox shim and injects a mailbox mcp_servers entry into the agent on
-    spawn -- it did NOT before this fix, since Supervisor's mailbox_client
-    was never supplied.
+    mailbox shim and writes a mailbox entry into the agent's --mcp-config
+    file on spawn -- it did NOT before this fix, since Supervisor's
+    mailbox_client was never supplied.
     """
     sup, _switch, _client = build_worker(_wcfg(
         repos_root=tmp_path / "repos", worktrees_root=tmp_path / "wt"))
@@ -102,10 +102,16 @@ async def test_build_worker_supervisor_starts_shim_on_spawn(tmp_path):
     sup._agent_factory = lambda **kwargs: FakeAgent(**kwargs)  # type: ignore[attr-defined]
     sup._shim_factory = shim_factory  # type: ignore[attr-defined]
 
+    writes = []
+    sup._mcp_config_writer = lambda wt, servers: (  # type: ignore[attr-defined]
+        writes.append((wt, servers)) or wt / ".skep" / "mcp.json")
+
     tid = await sup.spawn("nix", "clean nvidia")
 
     assert len(shims) == 1
-    assert captured["mcp_servers"]["mailbox"]["url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
+    assert writes[0][1]["mailbox"]["url"] == f"http://127.0.0.1:9/mcp?tid={tid}"
+    assert captured["mcp_config_path"].endswith(".skep/mcp.json")
+    assert "mcp_servers" not in captured
 
     pending = list(sup._tasks)  # type: ignore[attr-defined]
     if pending:
