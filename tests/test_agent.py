@@ -124,3 +124,12 @@ def test_agent_env_passthrough_missing_key_is_noop(monkeypatch):
     monkeypatch.delenv("NOT_SET_ANYWHERE", raising=False)
     env = _agent_env(None, passthrough=("NOT_SET_ANYWHERE",))
     assert "NOT_SET_ANYWHERE" not in env
+
+
+def test_agent_env_passthrough_cannot_reintroduce_config_dir(monkeypatch):
+    # The "never inherited" invariant must hold even if a passthrough key
+    # names CLAUDE_CONFIG_DIR: config_dir=None means it must be absent.
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/worker/own/cfg")
+    env = _agent_env(None, passthrough=("CLAUDE_CONFIG_DIR",))
+    assert "CLAUDE_CONFIG_DIR" not in env

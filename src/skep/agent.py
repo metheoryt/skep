@@ -51,6 +51,8 @@ def _agent_env(config_dir: str | None, *,
             env[key] = src[key]
     if config_dir is not None:
         env["CLAUDE_CONFIG_DIR"] = config_dir
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
     return env
 
 
