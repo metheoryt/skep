@@ -1,8 +1,11 @@
 # skep — architecture and concepts
 
-**Describes branch `l1.1-agent-memory-files` at `dd1c9f5` (2026-07-10).**
-This file is written by hand and does not regenerate. When it disagrees with the
-code, the code is right — fix this file. Overwrite it in place; never add a dated copy.
+**Describes `main` at `fc4d341` (2026-07-16), read on 2026-07-20.**
+Since the previous stamp (`dd1c9f5`, 2026-07-10) three things merged: **L1.1** agent
+memory, **Sessions A1** (worker-side invocations), and **L0.2 Increment 1** (agent
+env hygiene + MCP token off argv). This file is written by hand and does not
+regenerate. When it disagrees with the code, the code is right — fix this file.
+Overwrite it in place; never add a dated copy.
 
 ---
 
@@ -69,9 +72,11 @@ Inbound and outbound are different routes. They are not the reverse of each othe
    sends it over that worker's socket.
 5. Worker side: `ws_transport.WorkerWsClient` decodes the frame and calls
    `Supervisor.spawn`.
-6. `Supervisor.spawn` enforces `max_concurrent`, creates the worktree, records a
-   row in the worker's `Registry`, assembles the MCP server map and the tool grant,
-   and starts an `AgentProcess`.
+6. `Supervisor.spawn` — now a thin wrapper over `spawn_workspace` — enforces
+   `max_concurrent`, creates the worktree, records a row in the worker's `Registry`
+   (stamping `session_local_id = its own tid` for a first invocation), assembles the
+   MCP server map, **writes it to a `0600 <worktree>/.skep/mcp.json`** so the bearer
+   token never rides argv, builds the tool grant, and starts an `AgentProcess`.
 
 **Outbound — agent output becomes Telegram messages:**
 
@@ -90,12 +95,18 @@ The agent is spawned with roughly:
 ```
 claude -p <task> --output-format stream-json --verbose
        [--append-system-prompt <memory addendum>]
-       [--mcp-config {"mcpServers": {"memory": ..., "mailbox": ...}}]
+       [--mcp-config <worktree>/.skep/mcp.json]   # a PATH, not inline JSON
        [--allowedTools Bash,Edit,Write,mcp__memory__remember,...]
+       [--add-dir <path> ...] [--model <id>] [--resume <token>]
 ```
 
 `stdin` is `/dev/null`. `--input-format stream-json` is deliberately not used; it
-blocks on stdin until EOF.
+blocks on stdin until EOF. `--mcp-config` takes a **file path** (written by
+`worker/mcp_config.py:write_mcp_config`), not the inline JSON the earlier build
+passed — that moved the per-agent bearer token off `/proc/<pid>/cmdline` (L0.2).
+`--add-dir`/`--model`/`--resume` are the Sessions A1 argv: they render only when a
+multi-root workspace, a model pin, or a resume token is present, so a plain first
+spawn looks exactly as before.
 
 ---
 
@@ -126,7 +137,7 @@ target exists.
 
 | Database | Owner | Holds |
 |---|---|---|
-| `Registry` (`db.py`) | worker | its own tasks and an audit log |
+| `Registry` (`db.py`) | worker | its own tasks (each an invocation: `resume_token`, `model`, `session_local_id`) + an audit log |
 | `Bookkeeping` (`queen/bookkeeping.py`) | queen | `ref → (host, profile, local task id, topic id, message id)` |
 | `Mailbox` (`queen/mailbox.py`) | queen | all inter-agent and agent↔CEO messages |
 
@@ -135,8 +146,15 @@ queen must remember which topic and which editable message belong to which task.
 The mailbox DB is a *sibling file* of the bookkeeping DB, derived from its path in
 `queen/assembly.py`. They are not the same database.
 
-Other on-disk state: git worktrees under `worktrees_root`, and the agent memory
-store at `<repo>/.agent-memory/`.
+Other on-disk state: git worktrees under `worktrees_root`; the agent memory store at
+`<repo>/.agent-memory/`; and a per-agent `<worktree>/.skep/mcp.json` (0600, added to
+the worktree's git `info/exclude`) holding the MCP server map.
+
+The `Registry` schema is versioned by `PRAGMA user_version`; the v0→v1 migration
+renamed `session_id → resume_token` and added `model` + `session_local_id`
+(back-filled to each row's own id). This is the worker half of the **Sessions**
+model: a task row is now one *invocation*, and invocations sharing a
+`session_local_id` are one session's history (`db.py` invocation-grouping queries).
 
 ---
 
@@ -225,8 +243,27 @@ Status is one of **live** (exists in code), **design** (specified, not built), o
 |---|---|---|---|
 | **worktree isolation** | Each agent's `cwd` is a fresh `git worktree`. | `Supervisor.spawn` | live |
 | **profile isolation** | One worker per Claude profile, so a personal agent can never read work credentials. | `WorkerConfig` | live |
-| **`CLAUDE_CONFIG_DIR` injection** | The mechanism of profile isolation: a clean env with that variable set on each spawned `claude`. | `agent.py` | live |
+| **env hygiene / default-drop allowlist** | The spawned `claude`'s env is built from a small allowlist (`_CORE_ENV_KEYS` + optional proxy/SSL/`LC_*`), **not** `dict(os.environ)`. Drops the whole `SKEP_*`/`ANTHROPIC_*`/`CLAUDE_CODE_*` namespace so an agent can't read them from its own environ. Widen opt-in via `SKEP_AGENT_ENV_PASSTHROUGH`. | `agent.py:_agent_env` | live (L0.2) |
+| **`CLAUDE_CONFIG_DIR` injection** | The mechanism of profile isolation: the variable is set explicitly from the config-dir arg and **never inherited**. | `agent.py` | live |
+| **token off argv** | The MCP server map (mailbox bearer + memory stdio) is written to a `0600 .skep/mcp.json` and passed as `--mcp-config <path>`, so the per-agent bearer never appears on `/proc/<pid>/cmdline`. | `worker/mcp_config.py` | live (L0.2) |
 | **park & resume** | On a usage-limit hit, mark the task parked-until-reset rather than failed; notify the CEO. | — | design |
+
+### Sessions
+
+The multi-provider evolution. **A1 (worker-side) is live; A2 (queen-side) is not built.**
+
+| Term | Meaning | Lives in | Status |
+|---|---|---|---|
+| **session** | A pinned execution context (host/profile/runner/workspace/worktrees) that owns a Telegram topic and is parkable/resumable. Fleet-global `ref`. | design | design (A2) |
+| **invocation** | One runner run inside a session; holds a `resume_token` + `model`. A `Registry` row **is** an invocation. | `db.py`, `supervisor.py` | live (A1) |
+| **`session_local_id`** | The worker's own session key: a first invocation's == its tid; a resume reuses the origin's. A2 will map `ref → (host, profile, session_local_id)`. | `db.py`, `wire.py` | live (A1); ref-map is A2 |
+| **`spawn_workspace` / `resume`** | Multi-root + model + `session_local_id` spawn; `resume` = a new invocation on the same worktree from a stored `resume_token` (v1-minimal: token+model+`BASE_TOOLS`, no memory/mailbox). | `supervisor.py` | live (A1) |
+| **`Root` / `Workspace`** | Value types for a multi-root workspace; `requires_lease` flags a `primary:rw` root. A1 ships the predicate; **A2 acquires the lease.** | `workspace.py` | live (A1); lease is A2 |
+
+> **A1 delivers capability, not behavior.** `resume`, multi-root, and `--model` are
+> reachable only through new methods no caller yet exercises. The queen is untouched
+> except one optional ride-along wire field (`task_started.session_local_id`), which
+> it ignores until A2.
 
 ### Vision
 
@@ -256,13 +293,17 @@ Status is one of **live** (exists in code), **design** (specified, not built), o
 
 | Layer | | |
 |---|---|---|
-| L0 | **Mailbox** — agent-addressed messaging | shipped (+ L0.1 hardening) |
+| L0 | **Mailbox** — agent-addressed messaging | shipped (+ L0.1 hardening, + L0.2 Inc 1) |
 | L1 | **Agent memory** | shipped, then **superseded by L1.1** |
-| L1.1 | Memory as tracked repo files | **← you are here**, unmerged |
+| L1.1 | Memory as tracked repo files | **shipped & merged** |
 | L2 | **Persistent managers** — durable identity, rehydrated on demand | not built |
 | L3 | **Delegation** — `delegate` → brokered spawn → result | not built |
 | L4 | **Earned autonomy + reputation** | not built |
 | L5 | **Mentorship** — mostly L1 applied | not built |
+
+**← you are here:** L0 through L1.1 are merged. The two open fronts are **Sessions
+A2** (queen-side registry + `primary:rw` lease + topic-follows-session) and **L0.2
+Increment 2** (PID/mount namespaces for same-UID containment). Neither is started.
 
 L0 *depends on* Phase 2: the mailbox rides the transport seam. That dependency is
 why the two axes look tangled.
@@ -273,8 +314,17 @@ why the two axes look tangled.
 write path" (L1.1). The stated reason for the last move: *memory you cannot inspect
 is memory you cannot trust.*
 
-Two tiers exist only as commit messages: **L0.1** (mailbox hardening — shipped in
-two merges) and **L0.2** (per-agent UID isolation — a deferred follow-up, not started).
+Two sub-tiers exist only as commit messages, not in the table: **L0.1** (mailbox
+hardening — shipped in two merges) and **L0.2** (per-agent isolation). L0.2 is split:
+**Increment 1** (env hygiene + MCP token off argv) is *shipped*; **Increment 2** (PID/
+mount namespaces — the only thing that closes the same-UID sibling vector) is *not
+started*. Increment 1 confirmed on real `claude`; its honest residual is that a
+same-UID sibling can still read the worker's `/proc/<pid>/environ` or the 0600 file.
+
+A **third axis**, orthogonal again, is **Sessions** (see §6): a multi-provider
+evolution split into sub-projects A–E. **A1** (worker-side invocations) is merged;
+**A2** (queen-side) is next; B–E (runner seam, capability catalog, session spawning,
+Telegram role) are unstarted.
 
 ---
 
@@ -294,6 +344,8 @@ task by task, and they were accurate only on the day they ran.
 | `2026-07-05-l0-mcp-shim-spike.md` | Why the shim is shaped as it is | live, but **its topology decision was reversed at build time** |
 | `2026-07-09-l1-memory-substrate-design.md` | — | **superseded by L1.1** |
 | `2026-07-09-l1.1-agent-memory-files-design.md` | The current memory design | live |
+| `2026-07-10-sessions-design.md` | Session/Invocation/Manager model; the A–E split | live (A1 built, A2–E design) |
+| `2026-07-16-l0.2-increment1-...` (plan) | How env hygiene + token-off-argv were built | history (executed) |
 
 `.claude/memory/project.md` is the decision log, and it is the **only** place the
 north star and the L0–L5 ladder are written down. It is the richest document in the
@@ -323,6 +375,22 @@ worth knowing before you touch the code.
   not.** The integration test is committed but gated behind `SKEP_RUN_INTEGRATION=1`
   and has never run. Treat the claim as coded, not verified.
 - **README's "Agent memory" section describes L1** — the gortex daemon, `skep stores
-  nothing`, a preflight probe. That is correct for `main` today and becomes wrong
-  the moment `l1.1-agent-memory-files` merges. **Rewrite it as part of that merge.**
-- **README documents 7 environment variables; `config.py` reads 28.**
+  nothing`, a preflight probe. L1.1 has merged, so it is now **wrong**: memory is
+  tracked repo files with a `remember` shim. The rewrite is still owed (tracked in
+  `.claude/memory/project.md`).
+- **README documents 7 environment variables; `config.py` reads more** (the count
+  keeps growing — `SKEP_AGENT_ENV_PASSTHROUGH` is the newest). Treat README's env
+  list as illustrative, not complete.
+- **`.skep/mcp.json` has a fixed filename.** Safe today because every root is
+  `MODE_NEW` with a tid-unique worktree. The moment attach/`primary` roots go live
+  (Sessions A2 / L0.2 Inc 2), two concurrent agents against a shared checkout would
+  clobber each other's token file → silent 401. Must become tid-keyed
+  (`mcp-<tid>.json`) before then; flagged at the write site in `supervisor.py`.
+- **The A1→A2 handoff has one known gap.** The register-replay `_active_payload` in
+  `ws_transport.py` does **not** carry `session_local_id`, so an A2 queen reconnecting
+  would lose session identity on replayed active tasks. Not an A1 defect — fold into
+  the A2 plan.
+- **`RemoteWorker.spawn` returning `0` is load-bearing for Sessions.** The queen mints
+  a session `ref` only *after* `task_started`, so at first spawn there is no ref to key
+  by — which is exactly why the worker owns `session_local_id` and A2 maps ref→it,
+  rather than inverting the fire-and-forget protocol.
