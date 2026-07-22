@@ -1,3 +1,5 @@
+import sqlite3
+
 from skep.queen.bookkeeping import Bookkeeping
 
 
@@ -44,3 +46,77 @@ def test_worker_task_pairs_are_distinct_per_host_profile():
     r2 = bk.add("g16", "personal", 5, "r", "b", topic_id=2)
     assert r1 != r2
     assert bk.by_worker_task("g16", "personal", 5).ref == r2
+
+
+def test_add_defaults_session_local_id_to_local_id():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("g16", "work", 5, "nix", "t", topic_id=1)
+    assert bk.get(ref).session_local_id == 5
+
+
+def test_add_stores_explicit_session_local_id():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("g16", "work", 9, "nix", "t", topic_id=1, session_local_id=5)
+    assert bk.get(ref).session_local_id == 5
+
+
+def test_by_session_finds_the_row():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("g16", "work", 5, "nix", "t", topic_id=1)
+    assert bk.by_session("g16", "work", 5).ref == ref
+    assert bk.by_session("g16", "personal", 5) is None
+    assert bk.by_session("g16", "work", 99) is None
+
+
+def test_rebind_invocation_repoints_local_id_and_reactivates():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("g16", "work", 5, "nix", "t", topic_id=1)
+    bk.set_status(ref, "done")
+
+    bk.rebind_invocation(ref, 9)
+
+    e = bk.get(ref)
+    assert e.local_id == 9
+    assert e.status == "running"
+    assert e.session_local_id == 5      # the session id never moves
+    assert e.topic_id == 1              # the topic never moves
+    assert bk.by_worker_task("g16", "work", 9).ref == ref
+    assert bk.by_worker_task("g16", "work", 5) is None
+
+
+def test_migration_backfills_existing_rows(tmp_path):
+    # A v0 database written by the shipped code, then opened by this version.
+    path = str(tmp_path / "bk.sqlite")
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE entries (
+            ref INTEGER PRIMARY KEY AUTOINCREMENT,
+            host TEXT NOT NULL,
+            profile TEXT NOT NULL,
+            local_id INTEGER NOT NULL,
+            repo TEXT NOT NULL,
+            title TEXT NOT NULL,
+            topic_id INTEGER NOT NULL,
+            activity_msg_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'running'
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO entries (host, profile, local_id, repo, title, topic_id)"
+        " VALUES ('g16', 'work', 7, 'nix', 'old task', 42)"
+    )
+    conn.commit()
+    conn.close()
+
+    bk = Bookkeeping.open(path)
+    e = bk.by_worker_task("g16", "work", 7)
+    assert e.session_local_id == 7      # one-invocation session
+    assert e.topic_id == 42
+    bk.close()
+
+    # Re-opening an already-migrated DB must be a no-op, not an error.
+    bk2 = Bookkeeping.open(path)
+    assert bk2.by_worker_task("g16", "work", 7).session_local_id == 7
+    bk2.close()
