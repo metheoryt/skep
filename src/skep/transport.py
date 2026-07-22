@@ -38,7 +38,13 @@ class QueenInbox(Protocol):
     """The queen's receiving side. Each call carries the sender (host, profile)."""
 
     async def on_task_started(
-        self, host: str, profile: str, local_id: int, repo: str, title: str
+        self,
+        host: str,
+        profile: str,
+        local_id: int,
+        repo: str,
+        title: str,
+        session_local_id: int | None = None,
     ) -> None: ...
     async def on_activity(
         self, host: str, profile: str, local_id: int, line: str
@@ -66,9 +72,8 @@ class InMemoryEventSink:
     async def task_started(
         self, local_id: int, repo: str, title: str, session_local_id: int | None = None
     ) -> None:
-        # session_local_id is A2's; the in-memory queen ignores it for now.
         await self._inbox.on_task_started(
-            self._host, self._profile, local_id, repo, title
+            self._host, self._profile, local_id, repo, title, session_local_id
         )
 
     async def activity(self, local_id: int, line: str) -> None:

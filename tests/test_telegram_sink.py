@@ -78,3 +78,45 @@ async def test_on_task_started_is_reattach_idempotent():
 
     assert gw.create_topic.await_count == 1  # no duplicate topic
     assert bk.by_worker_task("g16", "work", 1) is not None
+
+
+async def test_second_invocation_reuses_ref_and_topic():
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+
+    await sink.on_task_started("g16", "work", 5, "nix", "t", session_local_id=5)
+    ref = bk.by_worker_task("g16", "work", 5).ref
+    await sink.on_done("g16", "work", 5, "done", "")
+
+    # A resume: new invocation id, same session.
+    await sink.on_task_started("g16", "work", 9, "nix", "t", session_local_id=5)
+
+    gw.create_topic.assert_awaited_once()          # NOT a second topic
+    e = bk.by_worker_task("g16", "work", 9)
+    assert e.ref == ref
+    assert e.topic_id == 555
+    assert e.status == "running"
+
+
+async def test_unknown_session_creates_a_new_topic():
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+    await sink.on_task_started("g16", "work", 5, "nix", "t", session_local_id=5)
+    await sink.on_task_started("g16", "work", 9, "nix", "t", session_local_id=9)
+    assert gw.create_topic.await_count == 2
+
+
+async def test_task_started_without_session_id_behaves_as_before():
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+    await sink.on_task_started("g16", "work", 5, "nix", "t")
+    gw.create_topic.assert_awaited_once_with("g16·work·nix")
+    assert bk.by_worker_task("g16", "work", 5).session_local_id == 5
+
+
+async def test_reattach_of_the_same_invocation_is_still_idempotent():
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+    await sink.on_task_started("g16", "work", 5, "nix", "t", session_local_id=5)
+    await sink.on_task_started("g16", "work", 5, "nix", "t", session_local_id=5)
+    gw.create_topic.assert_awaited_once()

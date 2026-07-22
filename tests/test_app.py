@@ -26,7 +26,9 @@ class FakeQueenSink:
     """Duck-typed QueenInbox stand-in -- build_worker_and_router never calls
     any of its methods at assembly time, so a bare stub is sufficient."""
 
-    async def on_task_started(self, host, profile, local_id, repo, title):
+    async def on_task_started(
+        self, host, profile, local_id, repo, title, session_local_id=None
+    ):
         pass
 
     async def on_activity(self, host, profile, local_id, line):

@@ -5,7 +5,9 @@ class RecordingInbox:
     def __init__(self):
         self.calls = []
 
-    async def on_task_started(self, host, profile, local_id, repo, title):
+    async def on_task_started(
+        self, host, profile, local_id, repo, title, session_local_id=None
+    ):
         self.calls.append(("started", host, profile, local_id, repo, title))
 
     async def on_activity(self, host, profile, local_id, line):
@@ -71,8 +73,13 @@ async def test_in_memory_sink_accepts_session_local_id():
     recorded = {}
 
     class RecordingInbox:
-        async def on_task_started(self, host, profile, local_id, repo, title):
-            recorded.update(local_id=local_id, repo=repo, title=title)
+        async def on_task_started(
+            self, host, profile, local_id, repo, title, session_local_id=None
+        ):
+            recorded.update(
+                local_id=local_id, repo=repo, title=title,
+                session_local_id=session_local_id,
+            )
 
     sink = InMemoryEventSink(RecordingInbox(), "h1", "default")
     await sink.task_started(7, "nix", "t", 7)   # 4-arg is the new contract
@@ -80,7 +87,9 @@ async def test_in_memory_sink_accepts_session_local_id():
     await sink.task_started(8, "nix", "t")       # 3-arg still valid (optional)
     after_three_arg = recorded.copy()
     assert after_four_arg["local_id"] == 7
+    assert after_four_arg["session_local_id"] == 7
     assert after_three_arg["local_id"] == 8
+    assert after_three_arg["session_local_id"] is None
 
 
 async def test_switchable_forwards_session_local_id_to_target():

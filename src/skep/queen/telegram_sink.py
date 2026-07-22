@@ -20,12 +20,33 @@ class QueenSink:
         self._mailbox_service = mailbox_service
 
     async def on_task_started(
-        self, host: str, profile: str, local_id: int, repo: str, title: str
+        self,
+        host: str,
+        profile: str,
+        local_id: int,
+        repo: str,
+        title: str,
+        session_local_id: int | None = None,
     ) -> None:
         if self._bk.by_worker_task(host, profile, local_id) is not None:
-            return  # re-attach: worker re-registered an already-known task
+            return  # re-attach: worker re-registered an already-known invocation
+        if session_local_id is not None:
+            prior = self._bk.by_session(host, profile, session_local_id)
+            if prior is not None:
+                # A later invocation of a known session: the topic follows the
+                # session, so reuse it -- and never create a second one.
+                self._bk.rebind_invocation(prior.ref, local_id)
+                return
         topic_id = await self._gw.create_topic(f"{host}·{profile}·{repo}")
-        self._bk.add(host, profile, local_id, repo, title, topic_id)
+        self._bk.add(
+            host,
+            profile,
+            local_id,
+            repo,
+            title,
+            topic_id,
+            session_local_id=session_local_id,
+        )
 
     async def on_activity(
         self, host: str, profile: str, local_id: int, line: str
