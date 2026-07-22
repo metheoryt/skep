@@ -70,7 +70,21 @@ def readonly_declaration(workspace: Workspace) -> str | None:
     paths instead (the memory shim takes rw roots only); real enforcement is
     Phase 4's sandbox.
     """
-    ro = [r for r in workspace.roots if r.access == ACCESS_RO]
+    # A root can be `ro` by name/access while resolving to the SAME path as an
+    # `rw` root in this workspace -- the canonical `--watch` spawn produces
+    # [{name, mode:new, access:rw}, {name, mode:primary, access:ro}] with one
+    # shared name, and resolve_roots maps a name to repos_root/<name>, so both
+    # entries land on one path. skep's own memory shim writes to that path via
+    # the rw root, so declaring it READ-ONLY here would tell the agent not to
+    # do what skep itself does there. Do not "simplify" this away: it is not
+    # redundant with the ACCESS_RO filter below, it is what makes that filter
+    # correct in the shared-path case.
+    rw_paths = {r.path for r in workspace.roots if r.access == ACCESS_RW}
+    ro = [
+        r
+        for r in workspace.roots
+        if r.access == ACCESS_RO and r.path not in rw_paths
+    ]
     if not ro:
         return None
     listed = "".join(f"- `{r.path}` ({r.name})\n" for r in ro)

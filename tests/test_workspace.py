@@ -59,3 +59,18 @@ def test_declaration_names_each_read_only_root():
     assert "/repos/nix" in text
     assert "/wt/nix-1" not in text
     assert "checkout" in text  # branch operations are named
+
+
+def test_no_declaration_when_ro_root_shares_a_path_with_an_rw_root():
+    # The canonical `--watch` spawn: [{name, mode:new, access:rw},
+    # {name, mode:primary, access:ro}] with the SAME name. resolve_roots maps
+    # a name to repos_root/<name>, so both entries resolve to the identical
+    # path -- skep's own rw memory shim writes there, so it must never also
+    # be declared READ-ONLY to the agent.
+    ws = Workspace(
+        roots=[
+            Root("nix", Path("/repos/nix"), mode=MODE_NEW, access="rw"),
+            Root("nix", Path("/repos/nix"), mode=MODE_PRIMARY, access=ACCESS_RO),
+        ]
+    )
+    assert readonly_declaration(ws) is None

@@ -290,3 +290,48 @@ async def test_no_declaration_when_no_read_only_root(tmp_path):
     captured = {}
     await _sup(tmp_path, StubMemory(), captured).spawn("skep", "do it")
     assert "READ-ONLY" not in captured.get("append_system_prompt", "")
+
+
+_SAME_NAME_WATCH_ROOTS = [
+    {"name": "nix", "mode": "new", "access": "rw"},
+    {"name": "nix", "mode": "primary", "access": "ro"},
+]
+"""The canonical `/spawn <host> <repo> --watch <task>` shape: same name for
+both the agent's own (rw) root and the watched (ro) root. resolve_roots maps
+a name to repos_root/<name>, so the two entries resolve to the IDENTICAL
+path -- this is what the rw-path exclusion in readonly_declaration exists
+for, and what makes the memory shim's name-keyed root map collapse below.
+"""
+
+
+async def test_memory_shim_root_map_collapses_for_same_name_watch(tmp_path):
+    """Same-name --watch spawn: the rw and ro roots share both name and
+    resolved path, so the memory shim's (name-keyed) root map ends up with a
+    single `nix` entry pointing at the parent repo either way -- the
+    rw-only write filter is inert here because the duplicate already
+    collapsed before it could matter. This documents that collapse rather
+    than asserting some stronger isolation that the code does not provide.
+    """
+    captured = {}
+    writes = []
+    await _sup(tmp_path, StubMemory(), captured, writes=writes).spawn(
+        "nix", "t", roots=_SAME_NAME_WATCH_ROOTS
+    )
+    _, written_servers = writes[0]
+    memory_args = written_servers["memory"]["args"]
+    nix_entries = [a for a in memory_args if a.startswith("nix=")]
+    assert nix_entries == [f"nix={tmp_path / 'repos' / 'nix'}"]
+
+
+async def test_no_readonly_declaration_for_same_name_watch(tmp_path):
+    """Fix under test: readonly_declaration must not tell the agent that
+    repos_root/nix is READ-ONLY when skep's own rw memory shim is
+    simultaneously configured to write .agent-memory/ files there. Since the
+    rw and ro roots resolve to the same path, and that is the only ro root,
+    no declaration is emitted at all.
+    """
+    captured = {}
+    await _sup(tmp_path, StubMemory(), captured).spawn(
+        "nix", "t", roots=_SAME_NAME_WATCH_ROOTS
+    )
+    assert "READ-ONLY" not in captured.get("append_system_prompt", "")
