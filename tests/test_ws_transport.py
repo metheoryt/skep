@@ -1,9 +1,11 @@
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-import aiohttp
 
 from skep import wire
 from skep.config import WorkerConfig
@@ -17,8 +19,12 @@ class RecordingInbox:
     def __init__(self):
         self.events: list[tuple] = []
 
-    async def on_task_started(self, host, profile, local_id, repo, title):
-        self.events.append(("task_started", host, profile, local_id, repo, title))
+    async def on_task_started(
+        self, host, profile, local_id, repo, title, session_local_id=None
+    ):
+        self.events.append(
+            ("task_started", host, profile, local_id, repo, title, session_local_id)
+        )
 
     async def on_activity(self, host, profile, local_id, line):
         self.events.append(("activity", host, profile, local_id, line))
@@ -73,7 +79,7 @@ async def test_register_then_event_reaches_inbox():
                     await asyncio.sleep(0.01)
     finally:
         await server.close()
-    assert ("task_started", "g16", "work", 1, "nix", "clean") in inbox.events
+    assert ("task_started", "g16", "work", 1, "nix", "clean", None) in inbox.events
     assert ("activity", "g16", "work", 1, "hi") in inbox.events
 
 
@@ -143,10 +149,14 @@ class PoisonedReplayInbox(RecordingInbox):
     entry, to exercise the register-time active_tasks replay loop's
     per-item error isolation (mirrors FlakyInbox for steady-state)."""
 
-    async def on_task_started(self, host, profile, local_id, repo, title):
+    async def on_task_started(
+        self, host, profile, local_id, repo, title, session_local_id=None
+    ):
         if repo == "poison":
             raise RuntimeError("replay failed")
-        await super().on_task_started(host, profile, local_id, repo, title)
+        await super().on_task_started(
+            host, profile, local_id, repo, title, session_local_id
+        )
 
 
 async def test_reattach_replay_error_does_not_kill_connection():
@@ -168,13 +178,17 @@ async def test_reattach_replay_error_does_not_kill_connection():
                 await ws.send_str(wire.encode(
                     wire.task_started_msg(2, "nix", "clean")))
                 for _ in range(100):
-                    if ("task_started", "g16", "work", 2, "nix", "clean") in inbox.events:
+                    if (
+                        "task_started", "g16", "work", 2, "nix", "clean", None
+                    ) in inbox.events:
                         break
                     await asyncio.sleep(0.01)
                 assert not ws.closed
     finally:
         await server.close()
-    assert ("task_started", "g16", "work", 2, "nix", "clean") in inbox.events
+    assert (
+        "task_started", "g16", "work", 2, "nix", "clean", None
+    ) in inbox.events
     assert not any(e[0] == "task_started" and e[4] == "poison" for e in inbox.events)
 
 
@@ -396,3 +410,41 @@ async def test_ws_event_sink_forwards_session_local_id():
     await sink.task_started(1, "nix", "t", 42)
     assert ws.sent[-1]["local_id"] == 1
     assert ws.sent[-1]["session_local_id"] == 42
+
+
+def test_active_payload_carries_session_local_id(tmp_path):
+    from skep.db import Registry
+
+    reg = Registry.open(":memory:")
+    tid = reg.add_task("nix", "t", str(tmp_path))
+    reg.update(tid, session_local_id=tid, status="running")
+
+    sup = SimpleNamespace(list_active=reg.list_active)
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg("ws://irrelevant"), sup, switch, secret="s")
+
+    payload = client._active_payload()
+    assert payload[0]["local_id"] == tid
+    assert payload[0]["session_local_id"] == tid
+
+
+def _server(inbox):
+    return QueenWsServer(QueenRouter(Bookkeeping.open(":memory:")), inbox, "s")
+
+
+async def test_replay_passes_session_local_id_to_the_inbox():
+    inbox = AsyncMock()
+    await _server(inbox)._replay_active(
+        "g16",
+        "work",
+        [{"local_id": 9, "repo": "nix", "title": "t", "session_local_id": 5}],
+    )
+    inbox.on_task_started.assert_awaited_once_with("g16", "work", 9, "nix", "t", 5)
+
+
+async def test_replay_tolerates_a_missing_session_local_id():
+    inbox = AsyncMock()
+    await _server(inbox)._replay_active(
+        "g16", "work", [{"local_id": 9, "repo": "nix", "title": "t"}]
+    )
+    inbox.on_task_started.assert_awaited_once_with("g16", "work", 9, "nix", "t", None)

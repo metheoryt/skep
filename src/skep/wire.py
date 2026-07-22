@@ -31,6 +31,13 @@ def decode(raw: str) -> dict[str, Any]:
 def register_msg(
     host: str, profile: str, version: str, active_tasks: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    """`active_tasks` entries: {"local_id", "repo", "title", "session_local_id"}.
+
+    `session_local_id` (int | None) lets the queen's reconnect replay reuse a
+    known session's ref/topic instead of minting a fresh one; workers built
+    before this field simply omit the key and replay tolerates that (Sessions
+    A2 task 3).
+    """
     return {
         "t": REGISTER,
         "host": host,
@@ -43,6 +50,8 @@ def register_msg(
 def heartbeat_msg(
     active_tasks: list[dict[str, Any]], capacity_remaining: int
 ) -> dict[str, Any]:
+    """`active_tasks` entries carry the same shape as `register_msg`'s, including
+    `session_local_id`."""
     return {
         "t": HEARTBEAT,
         "active_tasks": active_tasks,

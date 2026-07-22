@@ -98,20 +98,7 @@ class QueenWsServer:
         self._router.register(host, profile, remote)
         self._router.mark_online(host, profile)
         try:
-            for t in reg.get("active_tasks", []):
-                try:
-                    await self._inbox.on_task_started(
-                        host,
-                        profile,
-                        int(t["local_id"]),
-                        str(t["repo"]),
-                        str(t["title"]),
-                    )
-                except Exception:
-                    logger.exception(
-                        "error replaying active task from %s/%s: %r", host, profile, t
-                    )
-                    continue
+            await self._replay_active(host, profile, list(reg.get("active_tasks", [])))
 
             async for msg in ws:
                 if msg.type != web.WSMsgType.TEXT:
@@ -129,6 +116,33 @@ class QueenWsServer:
             self._router.detach_if_current(host, profile, remote)
         return ws
 
+    async def _replay_active(
+        self, host: str, profile: str, active_tasks: list[dict[str, Any]]
+    ) -> None:
+        """Re-create the queen's view of a reconnecting worker's active tasks.
+
+        Carries session_local_id through so replayed rows aren't sessionless
+        the moment a resume path exists (Sessions A2 task 3). Idempotent via
+        the sink's by_worker_task early return, so this changes no behavior
+        today.
+        """
+        for t in active_tasks:
+            try:
+                sid = t.get("session_local_id")
+                await self._inbox.on_task_started(
+                    host,
+                    profile,
+                    int(t["local_id"]),
+                    str(t["repo"]),
+                    str(t["title"]),
+                    None if sid is None else int(sid),
+                )
+            except Exception:
+                logger.exception(
+                    "error replaying active task from %s/%s: %r", host, profile, t
+                )
+                continue
+
     async def _dispatch(
         self, host: str, profile: str, ws: web.WebSocketResponse, msg: dict[str, Any]
     ) -> None:
@@ -137,7 +151,12 @@ class QueenWsServer:
             self._router.touch(host, profile)
         elif t == wire.TASK_STARTED:
             await self._inbox.on_task_started(
-                host, profile, int(msg["local_id"]), str(msg["repo"]), str(msg["title"])
+                host,
+                profile,
+                int(msg["local_id"]),
+                str(msg["repo"]),
+                str(msg["title"]),
+                msg.get("session_local_id"),
             )
         elif t == wire.ACTIVITY:
             await self._inbox.on_activity(
@@ -295,7 +314,12 @@ class WorkerWsClient:
 
     def _active_payload(self) -> list[dict[str, Any]]:
         return [
-            {"local_id": t.id, "repo": t.repo, "title": t.task}
+            {
+                "local_id": t.id,
+                "repo": t.repo,
+                "title": t.task,
+                "session_local_id": t.session_local_id,
+            }
             for t in self._sup.list_active()
             if t.id is not None
         ]
