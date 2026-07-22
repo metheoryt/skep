@@ -1,7 +1,7 @@
 # skep — architecture and concepts
 
-**Describes `metheoryt/ubuntu26-skep-develop` at `34e162b` (2026-07-22, branched
-from `main`@`eee92e6`), read on 2026-07-22.**
+**Describes `metheoryt/ubuntu26-skep-develop` at `3dfda20` (2026-07-23, branched
+from `main`@`eee92e6`), read on 2026-07-23.**
 Since the previous stamp (`main`@`fc4d341`, 2026-07-16) **Sessions A2** landed its
 first slice on this not-yet-merged branch: the queen-side session registry and the
 `/spawn --watch` two-root workspace (§7 has the detail; the rest of A2 is still
