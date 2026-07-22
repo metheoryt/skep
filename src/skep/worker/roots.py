@@ -40,8 +40,12 @@ def _resolve_name(repos_root: Path, name: object) -> Path:
         raise RootError(f"root name must be a non-empty string, got {name!r}")
     if "/" in name or "\\" in name or name == ".." or name.startswith("."):
         raise RootError(f"root name may not contain a path: {name!r}")
-    resolved = (repos_root / name).resolve()
-    if repos_root.resolve() not in resolved.parents:
+    try:
+        resolved = (repos_root / name).resolve()
+        root_resolved = repos_root.resolve()
+    except (ValueError, OSError) as exc:
+        raise RootError(f"root name is not a usable path: {name!r}") from exc
+    if root_resolved not in resolved.parents:
         raise RootError(f"root {name!r} escapes {repos_root}")
     return repos_root / name
 
@@ -52,6 +56,8 @@ def resolve_roots(repos_root: Path, specs: list[dict[str, Any]]) -> Workspace:
 
     roots: list[Root] = []
     for i, spec in enumerate(specs):
+        if not isinstance(spec, dict):
+            raise RootError(f"root spec must be an object, got {spec!r}")
         name = spec.get("name")
         mode = spec.get("mode", MODE_NEW)
         access = spec.get("access", ACCESS_RW)

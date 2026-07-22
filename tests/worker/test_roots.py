@@ -93,3 +93,17 @@ def test_symlink_escape_under_repos_root_is_refused(tmp_path):
 
     with pytest.raises(RootError, match="escapes"):
         resolve_roots(repos_root, [{"name": "evil", "mode": "new", "access": "rw"}])
+
+
+def test_non_dict_spec_entry_is_refused():
+    # Root specs are attacker-controlled JSON off the wire -- nothing
+    # guarantees every element of the list is an object.
+    with pytest.raises(RootError):
+        resolve_roots(REPOS, ["nix"])
+
+
+def test_name_with_embedded_nul_is_refused():
+    # JSON strings may contain a NUL; Path.resolve() raises ValueError on
+    # one, which must not escape resolve_roots as a bare ValueError.
+    with pytest.raises(RootError):
+        resolve_roots(REPOS, [{"name": "ni\x00x", "mode": "new", "access": "rw"}])
