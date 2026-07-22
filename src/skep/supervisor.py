@@ -16,6 +16,7 @@ from skep.transport import EventSink, MailboxClient
 from skep.worker.mcp_config import write_mcp_config
 from skep.worker.mcp_shim import MailboxShim
 from skep.worker.memory_shim import MEMORY_TOOLS, memory_shim_server
+from skep.worker.roots import resolve_roots
 from skep.workspace import MODE_NEW, Workspace
 
 BASE_TOOLS: tuple[str, ...] = ("Bash", "Edit", "Write")
@@ -81,9 +82,16 @@ class Supervisor:
         assert task is not None, f"task {task_id} vanished from registry"
         return task
 
-    async def spawn(self, repo: str, task: str) -> int:
-        # Legacy / wire entrypoint: one own worktree, read-write, no model.
-        ws = Workspace.single(repo, self._cfg.repos_root / repo)
+    async def spawn(
+        self, repo: str, task: str, roots: list[dict[str, Any]] | None = None
+    ) -> int:
+        # `roots` carries NAMES from the queen; the worker owns name->path
+        # resolution so no path ever crosses the wire. Absent roots is the
+        # legacy shape: one own worktree, read-write, no model.
+        if roots is None:
+            ws = Workspace.single(repo, self._cfg.repos_root / repo)
+        else:
+            ws = resolve_roots(self._cfg.repos_root, roots)
         return await self.spawn_workspace(ws, task)
 
     async def spawn_workspace(

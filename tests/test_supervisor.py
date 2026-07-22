@@ -4,6 +4,7 @@ from conftest import FakeAgent, RecordingSink, _cfg
 from skep.db import Registry
 from skep.stream import Event
 from skep.supervisor import CapacityError, Supervisor
+from skep.worker.roots import RootError
 from skep.workspace import ACCESS_RO, MODE_NEW, MODE_PRIMARY, Root, Workspace
 
 
@@ -136,3 +137,69 @@ async def test_spawn_is_single_root_workspace(worker_config_no_memory, fake_sink
     assert task.session_local_id == tid
     assert task.model is None
     assert created["add_dirs"] == []
+
+
+async def test_spawn_with_roots_renders_add_dir(worker_config_no_memory, fake_sink):
+    cfg = worker_config_no_memory
+    (cfg.repos_root / "nix").mkdir(parents=True)
+    reg = Registry.open(":memory:")
+    created = {}
+
+    def fake_agent(**kwargs):
+        created.update(kwargs)
+        return FakeAgent([])
+
+    sup = Supervisor(
+        cfg, reg, fake_sink,
+        agent_factory=fake_agent, worktree_factory=lambda *a: None,
+    )
+    await sup.spawn(
+        "nix",
+        "clean up",
+        roots=[
+            {"name": "nix", "mode": "new", "access": "rw"},
+            {"name": "nix", "mode": "primary", "access": "ro"},
+        ],
+    )
+    assert created["add_dirs"] == [cfg.repos_root / "nix"]
+    # cwd is still the fresh worktree, not the primary checkout
+    assert created["cwd"].parent == cfg.worktrees_root
+
+
+async def test_spawn_without_roots_is_unchanged(worker_config_no_memory, fake_sink):
+    cfg = worker_config_no_memory
+    (cfg.repos_root / "nix").mkdir(parents=True)
+    reg = Registry.open(":memory:")
+    created = {}
+
+    def fake_agent(**kwargs):
+        created.update(kwargs)
+        return FakeAgent([])
+
+    sup = Supervisor(
+        cfg, reg, fake_sink,
+        agent_factory=fake_agent, worktree_factory=lambda *a: None,
+    )
+    await sup.spawn("nix", "clean up")
+    assert created["add_dirs"] == []
+    assert created["cwd"].parent == cfg.worktrees_root
+
+
+async def test_spawn_with_a_refused_root_raises_root_error(
+    worker_config_no_memory, fake_sink
+):
+    cfg = worker_config_no_memory
+    reg = Registry.open(":memory:")
+    sup = Supervisor(
+        cfg, reg, fake_sink,
+        agent_factory=lambda **k: FakeAgent([]), worktree_factory=lambda *a: None,
+    )
+    with pytest.raises(RootError):
+        await sup.spawn(
+            "nix",
+            "t",
+            roots=[
+                {"name": "nix", "mode": "new", "access": "rw"},
+                {"name": "../etc", "mode": "primary", "access": "ro"},
+            ],
+        )
