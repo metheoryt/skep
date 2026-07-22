@@ -61,3 +61,28 @@ class Workspace:
         return any(
             r.mode == MODE_PRIMARY and r.access == ACCESS_RW for r in self.roots
         )
+
+
+def readonly_declaration(workspace: Workspace) -> str | None:
+    """Declare read-only roots to the agent, or None if every root is writable.
+
+    Advisory: the agent has Bash and can ignore this. skep binds its own write
+    paths instead (the memory shim takes rw roots only); real enforcement is
+    Phase 4's sandbox.
+    """
+    ro = [r for r in workspace.roots if r.access == ACCESS_RO]
+    if not ro:
+        return None
+    listed = "".join(f"- `{r.path}` ({r.name})\n" for r in ro)
+    return (
+        "## Read-only roots\n\n"
+        "The directories below are READ-ONLY. Read them freely -- that is why "
+        "you have them.\n"
+        "Do not create, edit or delete files there. Do not run branch "
+        "operations (`git checkout`,\n"
+        "`git reset`, `git stash`, `git rebase`) in them: another session or "
+        "the operator owns\n"
+        "that working tree, and switching its branch under them breaks their "
+        "work.\n\n"
+        f"{listed}"
+    )

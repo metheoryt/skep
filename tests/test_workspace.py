@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from skep.workspace import ACCESS_RO, MODE_NEW, MODE_PRIMARY, Root, Workspace
+from skep.workspace import (
+    ACCESS_RO,
+    MODE_NEW,
+    MODE_PRIMARY,
+    Root,
+    Workspace,
+    readonly_declaration,
+)
 
 
 def test_single_root_default_is_new_rw():
@@ -34,3 +41,21 @@ def test_primary_rw_requires_lease():
 def test_empty_workspace_rejected():
     with pytest.raises(ValueError):
         Workspace(roots=[])
+
+
+def test_no_declaration_when_every_root_is_writable():
+    ws = Workspace.single("nix", Path("/repos/nix"))
+    assert readonly_declaration(ws) is None
+
+
+def test_declaration_names_each_read_only_root():
+    ws = Workspace(
+        roots=[
+            Root("nix", Path("/wt/nix-1"), mode="new", access="rw"),
+            Root("nix", Path("/repos/nix"), mode="primary", access="ro"),
+        ]
+    )
+    text = readonly_declaration(ws)
+    assert "/repos/nix" in text
+    assert "/wt/nix-1" not in text
+    assert "checkout" in text  # branch operations are named

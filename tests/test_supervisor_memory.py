@@ -245,3 +245,48 @@ async def test_shim_is_pointed_at_the_parent_repo_not_the_worktree(tmp_path):
     # agent cannot redirect the write.
     assert args[-1] == f"skep={tmp_path / 'repos' / 'skep'}"
     assert args[-1] != f"skep={captured['cwd']}"
+
+
+_RO_ROOTS = [
+    {"name": "nix", "mode": "new", "access": "rw"},
+    {"name": "watched", "mode": "primary", "access": "ro"},
+]
+"""One rw root the agent owns (a fresh worktree of `nix`) plus one ro root
+(the operator's live checkout of `watched`) -- distinct names so the two
+paths never collide, which is what makes the rw/ro split observable below.
+"""
+
+
+async def test_memory_shim_never_receives_a_read_only_root(tmp_path):
+    captured = {}
+    writes = []
+    await _sup(tmp_path, StubMemory(), captured, writes=writes).spawn(
+        "nix", "t", roots=_RO_ROOTS
+    )
+    _, written_servers = writes[0]
+    memory_args = " ".join(written_servers["memory"]["args"])
+    assert f"nix={tmp_path / 'repos' / 'nix'}" in memory_args
+    assert "watched=" not in memory_args
+
+
+async def test_addendum_still_reads_the_read_only_root(tmp_path):
+    captured = {}
+    mem = StubMemory()
+    await _sup(tmp_path, mem, captured).spawn("nix", "t", roots=_RO_ROOTS)
+    # The addendum read must union every root, ro included -- reading the
+    # watched checkout's memory is the entire point of watching it.
+    assert mem.seen == [
+        [tmp_path / "repos" / "nix", tmp_path / "repos" / "watched"]
+    ]
+
+
+async def test_prompt_carries_the_read_only_declaration(tmp_path):
+    captured = {}
+    await _sup(tmp_path, StubMemory(), captured).spawn("nix", "t", roots=_RO_ROOTS)
+    assert "READ-ONLY" in captured["append_system_prompt"]
+
+
+async def test_no_declaration_when_no_read_only_root(tmp_path):
+    captured = {}
+    await _sup(tmp_path, StubMemory(), captured).spawn("skep", "do it")
+    assert "READ-ONLY" not in captured.get("append_system_prompt", "")

@@ -17,7 +17,7 @@ from skep.worker.mcp_config import write_mcp_config
 from skep.worker.mcp_shim import MailboxShim
 from skep.worker.memory_shim import MEMORY_TOOLS, memory_shim_server
 from skep.worker.roots import resolve_roots
-from skep.workspace import MODE_NEW, Workspace
+from skep.workspace import ACCESS_RW, MODE_NEW, Workspace, readonly_declaration
 
 BASE_TOOLS: tuple[str, ...] = ("Bash", "Edit", "Write")
 """The coding baseline (spec §2.3). `Read` is absent: it needs no grant (§2.5).
@@ -135,6 +135,7 @@ class Supervisor:
                 agent_kwargs["env_passthrough"] = self._cfg.agent_env_passthrough
             mcp_servers: dict[str, dict] = {}
             allowed_tools: list[str] = list(BASE_TOOLS)
+            prompt_parts: list[str] = []
 
             if self._cfg.memory_enabled:
                 # Read is a soft dependency: a broken store must never fail a
@@ -143,6 +144,14 @@ class Supervisor:
                 # worktree -- a fact must survive task failure and branch
                 # abandonment.
                 roots = [(r.name, r.path) for r in workspace.roots]
+                # Reads union every root, including ro ones -- reading the
+                # watched checkout is the whole point. WRITES are rw-only:
+                # `remember(project=...)` selects a root by name, so an ro root
+                # in this map would let an agent write .agent-memory/ files
+                # into the operator's live checkout.
+                write_roots = [
+                    (r.name, r.path) for r in workspace.roots if r.access == ACCESS_RW
+                ]
                 if self._memory is not None:
                     try:
                         addendum = await self._memory.addendum_for(
@@ -152,11 +161,11 @@ class Supervisor:
                         self._reg.log_audit(tid, "error", f"memory read failed: {exc}")
                         addendum = None
                     if addendum is not None:
-                        agent_kwargs["append_system_prompt"] = addendum
+                        prompt_parts.append(addendum)
                 # The shim is a stdio subprocess of `claude`, not of skep: no
                 # start(), no _shims entry, no teardown, no leak on a failed
                 # spawn (spec §5.2).
-                mcp_servers["memory"] = memory_shim_server(roots)
+                mcp_servers["memory"] = memory_shim_server(write_roots)
                 allowed_tools += MEMORY_TOOLS
 
             if self._mailbox_client is not None:
@@ -184,6 +193,13 @@ class Supervisor:
                 # primary roots go live.
                 mcp_config_path = self._mcp_config_writer(head_path, mcp_servers)
                 agent_kwargs["mcp_config_path"] = str(mcp_config_path)
+
+            declaration = readonly_declaration(workspace)
+            if declaration is not None:
+                prompt_parts.append(declaration)
+            if prompt_parts:
+                agent_kwargs["append_system_prompt"] = "\n\n".join(prompt_parts)
+
             agent_kwargs["allowed_tools"] = allowed_tools
 
             agent = self._agent_factory(**agent_kwargs)
