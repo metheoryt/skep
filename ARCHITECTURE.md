@@ -1,11 +1,13 @@
 # skep — architecture and concepts
 
-**Describes `main` at `fc4d341` (2026-07-16), read on 2026-07-20.**
-Since the previous stamp (`dd1c9f5`, 2026-07-10) three things merged: **L1.1** agent
-memory, **Sessions A1** (worker-side invocations), and **L0.2 Increment 1** (agent
-env hygiene + MCP token off argv). This file is written by hand and does not
-regenerate. When it disagrees with the code, the code is right — fix this file.
-Overwrite it in place; never add a dated copy.
+**Describes `metheoryt/ubuntu26-skep-develop` at `34e162b` (2026-07-22, branched
+from `main`@`eee92e6`), read on 2026-07-22.**
+Since the previous stamp (`main`@`fc4d341`, 2026-07-16) **Sessions A2** landed its
+first slice on this not-yet-merged branch: the queen-side session registry and the
+`/spawn --watch` two-root workspace (§7 has the detail; the rest of A2 is still
+open). This file is written by hand and does not regenerate. When it disagrees
+with the code, the code is right — fix this file. Overwrite it in place; never add
+a dated copy.
 
 ---
 
@@ -250,15 +252,20 @@ Status is one of **live** (exists in code), **design** (specified, not built), o
 
 ### Sessions
 
-The multi-provider evolution. **A1 (worker-side) is live; A2 (queen-side) is not built.**
+The multi-provider evolution. **A1 (worker-side) is live. A2 (queen-side) is
+*partly* live: the session registry and the `--watch` two-root slice shipped;
+the `primary:rw` lease, parking/`/resume`, and visibility are still not built.**
 
 | Term | Meaning | Lives in | Status |
 |---|---|---|---|
-| **session** | A pinned execution context (host/profile/runner/workspace/worktrees) that owns a Telegram topic and is parkable/resumable. Fleet-global `ref`. | design | design (A2) |
+| **session** | A pinned execution context (host/profile/runner/workspace/worktrees) that owns a Telegram topic and is parkable/resumable. Fleet-global `ref`. | `queen/bookkeeping.py` | live (registry only — parkable/resumable is still design) |
 | **invocation** | One runner run inside a session; holds a `resume_token` + `model`. A `Registry` row **is** an invocation. | `db.py`, `supervisor.py` | live (A1) |
-| **`session_local_id`** | The worker's own session key: a first invocation's == its tid; a resume reuses the origin's. A2 will map `ref → (host, profile, session_local_id)`. | `db.py`, `wire.py` | live (A1); ref-map is A2 |
+| **`session_local_id`** | The worker's own session key: a first invocation's == its tid; a resume reuses the origin's. Carried through the worker's register/heartbeat `active_tasks` payload and the queen's replay loop (`QueenWsServer._replay_active`), and through `Bookkeeping` (`session_local_id` column, `by_session()`, `rebind_invocation()`). | `db.py`, `wire.py`, `queen/bookkeeping.py` | live (A1 + A2 registry) |
+| **`QueenSink.on_task_started` ref/topic reuse** | Reuses a known session's `ref` and Telegram topic instead of opening a second one — the topic follows the session. **No live caller yet: nothing calls `on_task_started` with a session `/resume` would exercise, so this branch is tested directly, not through any command path.** | `queen/telegram_sink.py` | live, uncalled until `/resume` |
 | **`spawn_workspace` / `resume`** | Multi-root + model + `session_local_id` spawn; `resume` = a new invocation on the same worktree from a stored `resume_token` (v1-minimal: token+model+`BASE_TOOLS`, no memory/mailbox). | `supervisor.py` | live (A1) |
-| **`Root` / `Workspace`** | Value types for a multi-root workspace; `requires_lease` flags a `primary:rw` root. A1 ships the predicate; **A2 acquires the lease.** | `workspace.py` | live (A1); lease is A2 |
+| **`Root` / `Workspace`** | Value types for a multi-root workspace; `requires_lease` flags a `primary:rw` root. A1 ships the predicate; **the lease is still not built — A2 refuses `primary:rw` outright rather than granting it.** | `workspace.py` | live (A1); lease still open |
+| **`worker/roots.py:resolve_roots`** | The security gate: maps root NAMES (never paths) from the wire to paths under the worker's own `repos_root`; refuses (never downgrades) bad names, unknown mode/access, `primary:rw`, `attach`, a non-`new` head root, empty/malformed specs. | `worker/roots.py` | live (A2) |
+| **`--watch`** | `/spawn <host> [--profile p] <repo> [--watch] <task>` — opt-in two-root workspace (own worktree rw + the repo's primary checkout ro), so the agent can see uncommitted work in the operator's tree. Opt-in because a watched checkout may expose secrets never meant for an agent. | `app.py:watch_roots`, `parse_spawn` | live (A2) |
 
 > **A1 delivers capability, not behavior.** `resume`, multi-root, and `--model` are
 > reachable only through new methods no caller yet exercises. The queen is untouched
@@ -301,9 +308,17 @@ The multi-provider evolution. **A1 (worker-side) is live; A2 (queen-side) is not
 | L4 | **Earned autonomy + reputation** | not built |
 | L5 | **Mentorship** — mostly L1 applied | not built |
 
-**← you are here:** L0 through L1.1 are merged. The two open fronts are **Sessions
-A2** (queen-side registry + `primary:rw` lease + topic-follows-session) and **L0.2
-Increment 2** (PID/mount namespaces for same-UID containment). Neither is started.
+**← you are here:** L0 through L1.1 are merged. **Sessions A2** has landed its
+first slice, on a branch not yet merged to `main`: the queen-side session
+registry (`Bookkeeping` session-scoping, `session_local_id` through
+register/heartbeat replay, `QueenSink.on_task_started` ref/topic reuse) and the
+`/spawn --watch` two-root workspace (`worker/roots.py:resolve_roots`, the
+rw-only memory-shim binding, the READ-ONLY declaration). Still open within A2:
+the `primary:rw` lease table, parking and `/resume` (the ref/topic-reuse branch
+above has no caller until it exists), and `visible`/`spawn_visibility`
+enforcement — plus sub-project C's fleet catalog and D/E, which A2 never
+touched. **L0.2 Increment 2** (PID/mount namespaces for same-UID containment) is
+separately not started.
 
 L0 *depends on* Phase 2: the mailbox rides the transport seam. That dependency is
 why the two axes look tangled.
@@ -323,8 +338,9 @@ same-UID sibling can still read the worker's `/proc/<pid>/environ` or the 0600 f
 
 A **third axis**, orthogonal again, is **Sessions** (see §6): a multi-provider
 evolution split into sub-projects A–E. **A1** (worker-side invocations) is merged;
-**A2** (queen-side) is next; B–E (runner seam, capability catalog, session spawning,
-Telegram role) are unstarted.
+**A2** (queen-side) is *partly* shipped — the registry and the `--watch` slice, not
+yet merged to `main`, and not yet the lease/parking/visibility pieces; B–E (runner
+seam, capability catalog, session spawning, Telegram role) are unstarted.
 
 ---
 
@@ -344,7 +360,7 @@ task by task, and they were accurate only on the day they ran.
 | `2026-07-05-l0-mcp-shim-spike.md` | Why the shim is shaped as it is | live, but **its topology decision was reversed at build time** |
 | `2026-07-09-l1-memory-substrate-design.md` | — | **superseded by L1.1** |
 | `2026-07-09-l1.1-agent-memory-files-design.md` | The current memory design | live |
-| `2026-07-10-sessions-design.md` | Session/Invocation/Manager model; the A–E split | live (A1 built, A2–E design) |
+| `2026-07-10-sessions-design.md` | Session/Invocation/Manager model; the A–E split | live (A1 built; A2 registry + `--watch` slice built, lease/parking/visibility still design; B–E design) |
 | `2026-07-16-l0.2-increment1-...` (plan) | How env hygiene + token-off-argv were built | history (executed) |
 
 `.claude/memory/project.md` is the decision log, and it is the **only** place the
@@ -386,10 +402,11 @@ worth knowing before you touch the code.
   (Sessions A2 / L0.2 Inc 2), two concurrent agents against a shared checkout would
   clobber each other's token file → silent 401. Must become tid-keyed
   (`mcp-<tid>.json`) before then; flagged at the write site in `supervisor.py`.
-- **The A1→A2 handoff has one known gap.** The register-replay `_active_payload` in
-  `ws_transport.py` does **not** carry `session_local_id`, so an A2 queen reconnecting
-  would lose session identity on replayed active tasks. Not an A1 defect — fold into
-  the A2 plan.
+- **The A1→A2 handoff gap flagged in the A1 review is now closed.** The register-
+  replay payload in `ws_transport.py` (`QueenWsServer._replay_active`) carries
+  `session_local_id`, so a reconnecting A2 queen no longer loses session identity
+  on replayed active tasks. (It was still open as of the previous stamp; this is
+  no longer a sharp edge, kept here only as the paper trail.)
 - **`RemoteWorker.spawn` returning `0` is load-bearing for Sessions.** The queen mints
   a session `ref` only *after* `task_started`, so at first spawn there is no ref to key
   by — which is exactly why the worker owns `session_local_id` and A2 maps ref→it,

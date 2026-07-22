@@ -5,6 +5,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 import aiohttp
 
+from conftest import FakeAgent
+
 from skep.app import build_worker_and_router, parse_spawn
 from skep.config import QueenConfig, WorkerConfig
 from skep.db import Registry
@@ -140,6 +142,68 @@ async def test_two_worker_spawn_and_ls(tmp_path, git_repo, fake_claude_cmd):
     ls = router.format_ls()
     assert "work" in ls
     assert "personal" in ls
+
+
+async def test_watch_spawn_reaches_the_agent_argv(tmp_path, git_repo, fake_claude_cmd):
+    """Prove the whole --watch chain end to end: the Telegram-facing
+    `router.cmd_spawn` carries `roots` (names only, per spec item 6) into the
+    worker's Supervisor, `resolve_roots` maps those names to real paths under
+    the worker's own repos_root, and the rendered agent argv shows a fresh
+    worktree cwd, the watched checkout as an add_dir, and the READ-ONLY
+    declaration.
+
+    Uses two DIFFERENTLY-named roots rather than `app.watch_roots()`'s
+    canonical same-name pair. Per `workspace.readonly_declaration`, a
+    same-name --watch spawn has both roots resolve to the identical path
+    (mode=new's root and mode=primary's root both map to repos_root/<name>),
+    so the rw root suppresses its own ro declaration by design -- skep must
+    never tell the agent a directory it writes memory into is read-only. That
+    collision is exercised directly in test_supervisor.py; pinning it again
+    here would only prove the inert case. Two names instead prove the
+    declaration itself reaches argv, which is the seam this task is about.
+    """
+    repo_name = git_repo.name
+    watched_name = "watched-checkout"
+    (git_repo.parent / watched_name).mkdir()
+
+    wcfg = WorkerConfig(
+        host="g16", profile="work", claude_config_dir=None,
+        repos_root=git_repo.parent, worktrees_root=tmp_path / "wt",
+        db_path=":memory:", max_concurrent=8, claude_bin=fake_claude_cmd,
+    )
+    gw = _gateway()
+    bk = Bookkeeping.open(":memory:")
+    router, supervisor = build_worker_and_router(
+        wcfg, QueenSink(gw, bk), bk, registry=Registry.open(":memory:")
+    )
+
+    calls = []
+
+    def agent_factory(**kwargs):
+        calls.append(kwargs)
+        return FakeAgent([])
+
+    supervisor._agent_factory = agent_factory  # type: ignore[attr-defined]
+
+    await router.cmd_spawn(
+        "g16", "work", repo_name, "look around",
+        roots=[
+            {"name": repo_name, "mode": "new", "access": "rw"},
+            {"name": watched_name, "mode": "primary", "access": "ro"},
+        ],
+    )
+
+    for _ in range(200):
+        entry = bk.by_worker_task("g16", "work", 1)
+        if entry and entry.status in ("done", "failed", "killed"):
+            break
+        await asyncio.sleep(0.02)
+
+    assert len(calls) == 1
+    argv = calls[-1]
+    assert argv["cwd"].parent == wcfg.worktrees_root              # own fresh worktree
+    assert argv["add_dirs"] == [wcfg.repos_root / watched_name]   # watched checkout
+    assert "READ-ONLY" in argv["append_system_prompt"]
 
 
 async def test_wrong_secret_worker_never_registers():

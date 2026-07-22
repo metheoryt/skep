@@ -528,6 +528,48 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   - **On merge (still TODO):** README's "Agent memory" section and ARCHITECTURE.md §7 +
     the L0–L5 ladder get rewritten by the Sessions model.
 
+- **SESSIONS A2 (queen-side), Tasks 1–9 of 9 DONE 2026-07-22, branch
+  `metheoryt/ubuntu26-skep-develop` (not yet merged to `main`).** Ships the
+  registry + the `--watch` slice, NOT the full A2 scope the design spec lays out.
+  **Shipped:** (1) `Bookkeeping` entries are session-scoped — `session_local_id`
+  column, `PRAGMA user_version` migration backfilling `session_local_id=local_id`,
+  `by_session()` + `rebind_invocation()`. (2) `QueenSink.on_task_started` reuses a
+  known session's `ref` and Telegram topic instead of opening a second one — the
+  topic follows the session. **This branch has no live caller until `/resume`
+  exists; it is tested directly, not through any command path.** (3) The A1→A2
+  HANDOFF GAP flagged above (line ~520) is now CLOSED: `session_local_id` rides
+  the worker's register/heartbeat `active_tasks` payload and the queen's replay
+  loop (`QueenWsServer._replay_active`), so a reconnecting A2 queen no longer
+  loses session identity on replayed active tasks. (4) `worker/roots.py`:
+  `resolve_roots(repos_root, specs) -> Workspace`, the security gate mapping root
+  NAMES (never paths) to paths under the worker's own `repos_root`; refuses,
+  never downgrades — bad names, unknown mode/access, `primary:rw` (needs a lease,
+  not built), `attach` (no shared-worktree registry yet), a non-`new` head root,
+  an empty/malformed spec list. (5) `Supervisor.spawn(roots=...)` — absent
+  `roots` is byte-identical to pre-A2 behavior. (6) the spawn wire frame carries
+  `roots` as NAMES ONLY (never paths — `--add-dir` is an arbitrary-read
+  primitive, so a path on the wire would hand a rogue queen a read primitive
+  over the worker's whole disk); a refusal returns through the existing
+  `spawn_rejected` frame. (7) `access="ro"` binds skep's own write paths: the
+  memory shim gets rw roots only, reads still union every root (watching the
+  checkout IS the point), and `readonly_declaration` skips any path an rw root
+  also resolves to — so skep never tells the agent a directory it writes memory
+  into is read-only. Known consequence: the canonical same-name `--watch` pair
+  has BOTH roots resolve to one path, so this guard is inert there; it only
+  binds when the watched repo has a different name (proven in
+  `tests/test_integration.py::test_watch_spawn_reaches_the_agent_argv`, which
+  deliberately uses two differently-named roots to pin the declaration reaching
+  argv, not the inert same-name case). (8) `/spawn <host> [--profile p] <repo>
+  [--watch] <task>` — `--watch` is opt-in on purpose: it composes the two-root
+  workspace, and a watched checkout may hold uncommitted secrets the operator
+  never intended an agent to read. **Deferred, with reasons, not forgotten:** the
+  `primary:rw` lease table (nothing in this slice opens such a root — A2 refuses
+  the mode outright); parking/`/resume` and the resume state machine;
+  `visible`/`spawn_visibility` enforcement (governs children, arriving with
+  sub-project D); sub-project C's fleet catalog and `workspaces.yaml` (the
+  worker resolves names from its own `repos_root` instead, sidestepping C for
+  now); topic close/reopen ↔ park/resume binding (sub-project E owns it).
+
 ## Gotchas
 
 - **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
