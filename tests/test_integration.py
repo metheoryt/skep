@@ -7,7 +7,7 @@ import aiohttp
 
 from conftest import FakeAgent
 
-from skep.app import build_worker_and_router, parse_spawn
+from skep.app import build_worker_and_router, parse_spawn, watch_roots
 from skep.config import QueenConfig, WorkerConfig
 from skep.db import Registry
 from skep.queen.bookkeeping import Bookkeeping
@@ -204,6 +204,67 @@ async def test_watch_spawn_reaches_the_agent_argv(tmp_path, git_repo, fake_claud
     assert argv["cwd"].parent == wcfg.worktrees_root              # own fresh worktree
     assert argv["add_dirs"] == [wcfg.repos_root / watched_name]   # watched checkout
     assert "READ-ONLY" in argv["append_system_prompt"]
+
+
+async def test_watch_roots_canonical_shape_reaches_the_agent_argv(
+    tmp_path, git_repo, fake_claude_cmd
+):
+    """Prove the actual output of `app.watch_roots()` -- the canonical
+    same-name pair a real `/spawn <host> <repo> --watch <task>` emits --
+    survives the full chain (`router.cmd_spawn` -> Supervisor -> resolve_roots
+    -> agent argv), not just the differently-named shape the sibling test
+    above uses to keep a READ-ONLY assertion meaningful.
+
+    `watch_roots(repo_name)` is called verbatim (imported from `skep.app`,
+    not hand-built) so this test breaks the moment `watch_roots` changes
+    shape.
+    """
+    repo_name = git_repo.name
+
+    wcfg = WorkerConfig(
+        host="g16", profile="work", claude_config_dir=None,
+        repos_root=git_repo.parent, worktrees_root=tmp_path / "wt",
+        db_path=":memory:", max_concurrent=8, claude_bin=fake_claude_cmd,
+    )
+    gw = _gateway()
+    bk = Bookkeeping.open(":memory:")
+    router, supervisor = build_worker_and_router(
+        wcfg, QueenSink(gw, bk), bk, registry=Registry.open(":memory:")
+    )
+
+    calls = []
+
+    def agent_factory(**kwargs):
+        calls.append(kwargs)
+        return FakeAgent([])
+
+    supervisor._agent_factory = agent_factory  # type: ignore[attr-defined]
+
+    await router.cmd_spawn(
+        "g16", "work", repo_name, "look around",
+        roots=watch_roots(repo_name),
+    )
+
+    for _ in range(200):
+        entry = bk.by_worker_task("g16", "work", 1)
+        if entry and entry.status in ("done", "failed", "killed"):
+            break
+        await asyncio.sleep(0.02)
+
+    assert len(calls) == 1
+    argv = calls[-1]
+    assert argv["cwd"].parent == wcfg.worktrees_root                # own fresh worktree
+    assert argv["add_dirs"] == [wcfg.repos_root / repo_name]        # primary checkout
+
+    # Same-name pair: both roots resolve to repos_root/<repo_name>, the
+    # identical path. Per `workspace.readonly_declaration` (Task 7), a `ro`
+    # root is deliberately suppressed from the declaration when its path is
+    # also covered by an `rw` root in the same workspace -- skep must never
+    # tell the agent a directory its own memory shim writes into is
+    # read-only. So "no READ-ONLY declaration" is the CORRECT outcome here,
+    # not a gap: the differently-named sibling test above exists precisely
+    # because this same-name case can never exercise the declaration itself.
+    assert "READ-ONLY" not in (argv.get("append_system_prompt") or "")
 
 
 async def test_wrong_secret_worker_never_registers():
