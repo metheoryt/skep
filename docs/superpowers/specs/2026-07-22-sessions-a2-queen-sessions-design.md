@@ -80,22 +80,35 @@ migration, not a formality.
 *invocation*, so activity/milestone/done routing needs no change.
 
 **Ref and topic reuse — this is topic-follows-session.** `QueenInbox.on_task_started`
-gains the optional `session_local_id` it already receives and ignores:
+gains a `session_local_id` parameter (the WS server already receives the field on the
+frame and drops it). `QueenSink.on_task_started` becomes:
 
-- If `session_local_id` is not `None` and `by_session(...)` finds a row: reuse that
-  row's `ref` and `topic_id`, repoint `local_id` at the new invocation, set status
-  back to `running`. No new topic, no new ref.
-- Otherwise: insert, storing `session_local_id` (falling back to the new row's own
-  `local_id` when the field is absent).
+- Same invocation already known (`by_worker_task`) → return, as today.
+- Else `session_local_id` is not `None` and `by_session(...)` finds a row → reuse that
+  row's `ref` and `topic_id`, repoint `local_id` at the new invocation, set status back
+  to `running`. **Critically, this branch runs before `create_topic`** — today the topic
+  is created and then passed into `add()`, so reuse must short-circuit the creation, not
+  just the insert.
+- Else → create the topic and insert, storing `session_local_id` (falling back to the
+  new row's own `local_id` when the field is absent).
 
-The `None` fallback is one defensive line — `session_local_id` is typed optional
-from A1 and both in-process and WS sinks may omit it.
+The `None` fallback is one defensive line — `session_local_id` is typed optional from
+A1 and both in-process and WS sinks may omit it.
+
+**Honest status of the reuse branch: it has no live caller in A2.** The only way to
+produce a second `task_started` for a known session is a resume, which A2 does not
+build. Reconnect-replay does *not* exercise it — `QueenSink.on_task_started` already
+returns early on a `by_worker_task` hit (`telegram_sink.py:25`), so replaying the same
+invocation is already idempotent and does not mint a fresh ref. This branch is
+forward-looking plumbing for `/resume`, built now because the registry column and the
+migration are being added anyway. It is tested directly, not through a live path.
 
 **Register-replay.** `WorkerWsClient._active_payload` (`ws_transport.py:295`) does not
-carry `session_local_id`, so a queen reconnect would replay active tasks as sessionless
-and mint fresh refs — the gap the A1 whole-branch review flagged. A2 adds the field to
-the payload, and the replay loop in `QueenWsServer._handle` passes it to
-`on_task_started`. Same for the heartbeat payload, which shares the builder.
+carry `session_local_id`. That is harmless today for the reason just given, but it means
+the replayed rows would be sessionless the moment resume exists — the gap the A1
+whole-branch review flagged. A2 adds the field to the payload and passes it through the
+replay loop in `QueenWsServer._handle`. The heartbeat payload shares the builder and
+gets it for free.
 
 ---
 
@@ -180,6 +193,11 @@ takes a `project` argument selecting a root by name, an agent could write
 `.agent-memory/` files into the CEO's live checkout. A2 passes **rw roots only** to the
 shim. Reading is unaffected: `MemoryProvider.addendum_for` continues to union every
 root's store, `ro` included — reading a `ro` root is the entire point.
+
+**Implementation trap:** that one `roots` variable feeds *both* the addendum read
+(`supervisor.py:141`) and the shim (`:151`). The fix is two lists, not a narrowed one —
+narrowing in place would silently starve the addendum of the watched root's memory,
+which is exactly the thing the CEO wanted the agent to see.
 
 **Spawn addendum.** The addendum gains a declaration naming each `ro` root: read
 freely, do not write, and do not run branch operations (`checkout`, `reset`, `stash`,
