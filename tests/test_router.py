@@ -17,7 +17,19 @@ async def test_spawn_routes_to_registered_worker():
     h = _handler()
     router.register("g16", "work", h)
     await router.cmd_spawn("g16", "work", "nix", "clean nvidia")
-    h.spawn.assert_awaited_once_with("nix", "clean nvidia")
+    h.spawn.assert_awaited_once_with("nix", "clean nvidia", None)
+
+
+async def test_cmd_spawn_forwards_roots():
+    bk = Bookkeeping.open(":memory:")
+    router = QueenRouter(bk)
+    handler = AsyncMock()
+    router.register("g16", "work", handler)
+    roots = [{"name": "nix", "mode": "new", "access": "rw"}]
+
+    await router.cmd_spawn("g16", "work", "nix", "t", roots=roots)
+
+    handler.spawn.assert_awaited_once_with("nix", "t", roots)
 
 
 async def test_spawn_unknown_worker_raises():

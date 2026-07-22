@@ -44,3 +44,17 @@ def test_decode_rejects_non_dict():
 def test_decode_rejects_missing_tag():
     with pytest.raises(ValueError):
         wire.decode('{"local_id": 1}')
+
+
+def test_spawn_msg_carries_roots():
+    roots = [
+        {"name": "nix", "mode": "new", "access": "rw"},
+        {"name": "nix", "mode": "primary", "access": "ro"},
+    ]
+    msg = wire.decode(wire.encode(wire.spawn_msg("nix", "t", roots)))
+    assert msg["roots"] == roots
+
+
+def test_spawn_msg_roots_default_to_none():
+    msg = wire.decode(wire.encode(wire.spawn_msg("nix", "t")))
+    assert msg.get("roots") is None

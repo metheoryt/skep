@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
@@ -59,11 +60,18 @@ class QueenRouter:
     def last_seen(self, host: str, profile: str) -> float | None:
         return self._last_seen.get((host, profile))
 
-    async def cmd_spawn(self, host: str, profile: str, repo: str, task: str) -> None:
+    async def cmd_spawn(
+        self,
+        host: str,
+        profile: str,
+        repo: str,
+        task: str,
+        roots: list[dict[str, Any]] | None = None,
+    ) -> None:
         handler = self._workers.get((host, profile))
         if handler is None:
             raise UnknownWorker(f"{host}/{profile}")
-        await handler.spawn(repo, task)
+        await handler.spawn(repo, task, roots)
 
     async def cmd_kill(self, ref: int) -> bool:
         entry = self._bk.get(ref)

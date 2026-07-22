@@ -23,6 +23,7 @@ from skep.transport import (
     SwitchableEventSink,
     SwitchableMailboxClient,
 )
+from skep.worker.roots import RootError
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,10 @@ class RemoteWorker:
     def __init__(self, ws: web.WebSocketResponse) -> None:
         self._ws = ws
 
-    async def spawn(self, repo: str, task: str) -> int:
-        await self._ws.send_str(wire.encode(wire.spawn_msg(repo, task)))
+    async def spawn(
+        self, repo: str, task: str, roots: list[dict[str, Any]] | None = None
+    ) -> int:
+        await self._ws.send_str(wire.encode(wire.spawn_msg(repo, task, roots)))
         return 0
 
     async def kill(self, task_id: int) -> bool:
@@ -401,8 +404,10 @@ class WorkerWsClient:
         t = msg.get("t")
         if t == wire.SPAWN:
             try:
-                await self._sup.spawn(str(msg["repo"]), str(msg["task"]))
-            except CapacityError as exc:
+                await self._sup.spawn(
+                    str(msg["repo"]), str(msg["task"]), roots=msg.get("roots")
+                )
+            except (CapacityError, RootError) as exc:
                 await ws.send_str(wire.encode(wire.spawn_rejected_msg(str(exc))))
         elif t == wire.KILL:
             await self._sup.kill(int(msg["task_id"]))

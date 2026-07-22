@@ -218,7 +218,7 @@ class FakeSupervisor:
     def list_active(self):
         return []
 
-    async def spawn(self, repo, task):
+    async def spawn(self, repo, task, roots=None):
         from skep.supervisor import CapacityError
         if not self._capacity_ok:
             raise CapacityError("at capacity (0 running)")

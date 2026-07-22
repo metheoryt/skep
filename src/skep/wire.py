@@ -87,8 +87,11 @@ def spawn_rejected_msg(reason: str) -> dict[str, Any]:
     return {"t": SPAWN_REJECTED, "reason": reason}
 
 
-def spawn_msg(repo: str, task: str) -> dict[str, Any]:
-    return {"t": SPAWN, "repo": repo, "task": task}
+def spawn_msg(
+    repo: str, task: str, roots: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    # `roots` carries names only -- never paths (spec section 4).
+    return {"t": SPAWN, "repo": repo, "task": task, "roots": roots}
 
 
 def kill_msg(task_id: int) -> dict[str, Any]:

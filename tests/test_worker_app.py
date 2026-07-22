@@ -1,14 +1,17 @@
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
+from skep import wire
 from skep.config import WorkerConfig
 from skep.memory import MemoryStore
 from skep.worker import app as worker_app
 from skep.worker.app import build_worker, serve
 from skep.transport import SwitchableEventSink, SwitchableMailboxClient
 from skep.supervisor import Supervisor
+from skep.ws_transport import WorkerWsClient
 
 
 def _wcfg(**kw):
@@ -150,3 +153,34 @@ async def test_serve_refuses_whitespace_only_shared_secret(monkeypatch):
 def test_build_worker_gives_supervisor_a_real_memory_store():
     supervisor, _switch, _client = build_worker(_wcfg())
     assert isinstance(supervisor._memory, MemoryStore)  # type: ignore[attr-defined]
+
+
+def _client(sup):
+    switch = SwitchableEventSink()
+    return WorkerWsClient(_wcfg(), sup, switch, secret="s")
+
+
+async def test_on_command_forwards_roots_to_the_supervisor():
+    sup = AsyncMock()
+    client = _client(sup)
+    ws = AsyncMock()
+    roots = [{"name": "nix", "mode": "new", "access": "rw"}]
+
+    await client._on_command(ws, wire.spawn_msg("nix", "t", roots))
+
+    sup.spawn.assert_awaited_once_with("nix", "t", roots=roots)
+
+
+async def test_a_refused_root_is_reported_as_a_spawn_rejection():
+    from skep.worker.roots import RootError
+
+    sup = AsyncMock()
+    sup.spawn.side_effect = RootError("attach roots are not supported yet")
+    client = _client(sup)
+    ws = AsyncMock()
+
+    await client._on_command(ws, wire.spawn_msg("nix", "t", [{"name": "nix"}]))
+
+    sent = wire.decode(ws.send_str.await_args[0][0])
+    assert sent["t"] == wire.SPAWN_REJECTED
+    assert "attach" in sent["reason"]
