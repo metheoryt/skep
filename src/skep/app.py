@@ -29,6 +29,7 @@ from skep.transport import (
     InMemoryMailboxClient,
     SwitchableMailboxClient,
 )
+from skep.worker.roots import RootError
 
 _REPLY_ID_RE = re.compile(r"reply id:\s*(\d+)")
 
@@ -44,8 +45,13 @@ def _extract_reply_id(text: str) -> int | None:
     return int(matches[-1]) if matches else None
 
 
-def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
-    """Parse `<host> [--profile <p>] <repo> <task...>` -> (host, profile, repo, task)."""
+def parse_spawn(args: str) -> tuple[str, str, str, bool, str] | None:
+    """Parse `<host> [--profile <p>] <repo> [--watch] <task...>`.
+
+    Returns (host, profile, repo, watch, task). `--watch` adds the repo's main
+    checkout as a read-only second root, so the agent can see uncommitted work
+    in the operator's tree while working in its own worktree.
+    """
     tokens = (args or "").split()
     if len(tokens) < 3:
         return None
@@ -60,8 +66,23 @@ def parse_spawn(args: str) -> tuple[str, str, str, str] | None:
     if len(rest) < 2:
         return None
     repo = rest[0]
-    task = " ".join(rest[1:])
-    return host, profile, repo, task
+    rest = rest[1:]
+    watch = False
+    if rest and rest[0] == "--watch":
+        watch = True
+        rest = rest[1:]
+    if not rest:
+        return None
+    task = " ".join(rest)
+    return host, profile, repo, watch, task
+
+
+def watch_roots(repo: str) -> list[dict[str, str]]:
+    """The canonical two-root workspace: own worktree + primary checkout, ro."""
+    return [
+        {"name": repo, "mode": "new", "access": "rw"},
+        {"name": repo, "mode": "primary", "access": "ro"},
+    ]
 
 
 async def handle_ceo_reply(
@@ -142,16 +163,22 @@ def build_dispatcher(
         parsed = parse_spawn(command.args or "")
         if parsed is None:
             await message.answer(
-                "Usage: /spawn <host> [--profile <p>] <repo> <task>", parse_mode=None
+                "Usage: /spawn <host> [--profile <p>] <repo> [--watch] <task>",
+                parse_mode=None,
             )
             return
-        host, profile, repo, task = parsed
+        host, profile, repo, watch, task = parsed
         try:
-            await router.cmd_spawn(host, profile, repo, task)
+            await router.cmd_spawn(
+                host, profile, repo, task, roots=watch_roots(repo) if watch else None
+            )
         except UnknownWorker:
             await message.answer(f"No worker for {host}/{profile}", parse_mode=None)
             return
         except CapacityError as exc:
+            await message.answer(f"Rejected: {exc}", parse_mode=None)
+            return
+        except RootError as exc:
             await message.answer(f"Rejected: {exc}", parse_mode=None)
             return
         await message.answer(f"Spawned on {host}/{profile}", parse_mode=None)

@@ -19,13 +19,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 def test_parse_spawn_with_profile():
     assert parse_spawn("g16 --profile work nix clean the nvidia mess") == (
-        "g16", "work", "nix", "clean the nvidia mess",
+        "g16", "work", "nix", False, "clean the nvidia mess",
     )
 
 
 def test_parse_spawn_default_profile():
     assert parse_spawn("g16 nix clean nvidia") == (
-        "g16", "default", "nix", "clean nvidia",
+        "g16", "default", "nix", False, "clean nvidia",
     )
 
 

@@ -2,9 +2,14 @@
 
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-from skep.app import build_worker_and_router
-from skep.config import WorkerConfig
+import pytest
+from aiogram import Bot
+from aiogram.types import Chat, Message, Update, User
+
+from skep.app import build_dispatcher, build_worker_and_router, parse_spawn, watch_roots
+from skep.config import QueenConfig, WorkerConfig
 from skep.db import Registry
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.mailbox import Mailbox, MailboxService
@@ -169,3 +174,103 @@ async def test_build_worker_and_router_supervisor_starts_shim_on_spawn(tmp_path)
     if pending:
         await asyncio.gather(*pending)
     assert shims[0].stopped
+
+
+def test_parse_spawn_without_watch():
+    assert parse_spawn("g16 nix fix the thing") == (
+        "g16", "default", "nix", False, "fix the thing",
+    )
+
+
+def test_parse_spawn_with_watch():
+    assert parse_spawn("g16 --profile work nix --watch fix the thing") == (
+        "g16", "work", "nix", True, "fix the thing",
+    )
+
+
+def test_watch_must_follow_the_repo_not_hide_in_the_task():
+    # A --watch that appears later is part of the task text, not a flag.
+    host, profile, repo, watch, task = parse_spawn("g16 nix fix --watch the thing")
+    assert watch is False
+    assert task == "fix --watch the thing"
+
+
+def test_parse_spawn_rejects_a_watch_with_no_task():
+    assert parse_spawn("g16 nix --watch") is None
+
+
+def test_watch_roots_is_own_worktree_rw_plus_primary_ro():
+    assert watch_roots("nix") == [
+        {"name": "nix", "mode": "new", "access": "rw"},
+        {"name": "nix", "mode": "primary", "access": "ro"},
+    ]
+
+
+# -- /spawn dispatcher wiring -------------------------------------------
+#
+# No dispatcher/router test fixtures existed anywhere in this repo prior to
+# this task (parse_spawn's own tests live in test_integration.py and never
+# drive build_dispatcher). These are new, minimal, and only cover the one
+# thing this task adds: that --watch changes what roots= the handler passes
+# to router.cmd_spawn.
+
+_OWNER_ID = 42
+
+
+def _qcfg(**overrides):
+    kwargs = dict(
+        bot_token="123:abc", owner_id=_OWNER_ID, group_chat_id=-100,
+        shared_secret="s", bookkeeping_db=":memory:",
+    )
+    kwargs.update(overrides)
+    return QueenConfig(**kwargs)
+
+
+class _FakeRouter:
+    def __init__(self):
+        self.cmd_spawn = AsyncMock()
+
+
+@pytest.fixture
+def router():
+    return _FakeRouter()
+
+
+@pytest.fixture
+def dispatcher(router):
+    return build_dispatcher(router, _qcfg())
+
+
+async def _send(dispatcher, text):
+    """Drive one owner-authored text message through a built Dispatcher."""
+    bot = Bot(token="123:abc")
+    user = User(id=_OWNER_ID, is_bot=False, first_name="Owner")
+    chat = Chat(id=1, type="private")
+    message = Message(message_id=1, date=0, chat=chat, from_user=user, text=text)
+    update = Update(update_id=1, message=message)
+    try:
+        with patch.object(Message, "answer", AsyncMock()):
+            await dispatcher.feed_update(bot, update)
+    finally:
+        await bot.session.close()
+
+
+async def test_spawn_command_with_watch_sends_two_roots(dispatcher, router):
+    await _send(dispatcher, "/spawn g16 nix --watch fix it")
+    router.cmd_spawn.assert_awaited_once_with(
+        "g16",
+        "default",
+        "nix",
+        "fix it",
+        roots=[
+            {"name": "nix", "mode": "new", "access": "rw"},
+            {"name": "nix", "mode": "primary", "access": "ro"},
+        ],
+    )
+
+
+async def test_spawn_command_without_watch_sends_no_roots(dispatcher, router):
+    await _send(dispatcher, "/spawn g16 nix fix it")
+    router.cmd_spawn.assert_awaited_once_with(
+        "g16", "default", "nix", "fix it", roots=None
+    )
