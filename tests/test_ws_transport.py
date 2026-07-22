@@ -211,6 +211,7 @@ class FakeSupervisor:
 
     def __init__(self, capacity_ok=True):
         self.spawned: list[tuple[str, str]] = []
+        self.roots_seen: list[list[dict] | None] = []
         self.killed: list[int] = []
         self.panics = 0
         self._capacity_ok = capacity_ok
@@ -223,6 +224,7 @@ class FakeSupervisor:
         if not self._capacity_ok:
             raise CapacityError("at capacity (0 running)")
         self.spawned.append((repo, task))
+        self.roots_seen.append(roots)
         return 1
 
     async def kill(self, task_id):
@@ -268,6 +270,47 @@ async def test_worker_client_dispatches_spawn_command():
     finally:
         await server.close()
     assert sup.spawned == [("nix", "clean")]
+
+
+async def test_worker_client_dispatches_spawn_command_with_roots():
+    # Every roots-carrying spawn elsewhere in the suite goes through the
+    # in-process build_worker_and_router wiring (test_integration.py) or a
+    # mock on both sides of the seam (test_worker_app.py). This drives the
+    # actual distributed path -- RemoteWorker.spawn(roots) -> wire.spawn_msg
+    # over a real WebSocket -> WorkerWsClient._on_command -> the far-side
+    # Supervisor -- which is the one the names-never-paths design exists for.
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor()
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s")
+    roots = [
+        {"name": "nix", "mode": "new", "access": "rw"},
+        {"name": "nix", "mode": "primary", "access": "ro"},
+    ]
+    try:
+        async with aiohttp.ClientSession() as sess:
+            task = asyncio.create_task(client.run_once(sess, url))
+            for _ in range(100):
+                try:
+                    await router.cmd_spawn(
+                        "g16", "work", "nix", "watch task", roots=roots
+                    )
+                    break
+                except Exception:
+                    await asyncio.sleep(0.01)
+            for _ in range(100):
+                if sup.spawned:
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+    finally:
+        await server.close()
+    assert sup.spawned == [("nix", "watch task")]
+    # The roots list must arrive intact -- same shape, same content -- on
+    # the far side of the real WebSocket, not just through the codec.
+    assert sup.roots_seen == [roots]
 
 
 async def test_worker_client_reports_capacity_rejection():

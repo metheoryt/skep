@@ -87,9 +87,14 @@ class Supervisor:
     ) -> int:
         # `roots` carries NAMES from the queen; the worker owns name->path
         # resolution so no path ever crosses the wire. Absent roots is the
-        # legacy shape: one own worktree, read-write, no model.
+        # legacy shape: one own worktree, read-write, no model. Both shapes
+        # carry `repo`/`name` verbatim off the wire, so both must run
+        # through the same name validator (resolve_roots/_resolve_name) --
+        # a single spec here reproduces exactly what Workspace.single would
+        # have built (mode "new", access "rw", path repos_root/repo), just
+        # gated.
         if roots is None:
-            ws = Workspace.single(repo, self._cfg.repos_root / repo)
+            ws = resolve_roots(self._cfg.repos_root, [{"name": repo}])
         else:
             ws = resolve_roots(self._cfg.repos_root, roots)
         return await self.spawn_workspace(ws, task)

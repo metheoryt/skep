@@ -1,5 +1,6 @@
 from skep.config import WorkerConfig
 from skep.db import Registry
+from skep.memory import MemoryStore, write_memory
 from skep.supervisor import BASE_TOOLS, MAILBOX_TOOLS, Supervisor
 from skep.worker.memory_shim import MEMORY_TOOLS
 
@@ -335,3 +336,25 @@ async def test_no_readonly_declaration_for_same_name_watch(tmp_path):
         "nix", "t", roots=_SAME_NAME_WATCH_ROOTS
     )
     assert "READ-ONLY" not in captured.get("append_system_prompt", "")
+
+
+async def test_same_name_watch_renders_each_memory_fact_once(tmp_path):
+    """Fix under test: the canonical same-name `--watch` shape must not
+    duplicate every fact in the rendered addendum. The read list unions
+    every root ON PURPOSE (test_addendum_still_reads_the_read_only_root
+    above) -- but here both roots resolve to the IDENTICAL path, so a naive
+    union reads (and renders) the same fact twice, silently halving the
+    effective byte budget. Uses the real MemoryStore, not StubMemory: the
+    dedupe lives in addendum_for, so a StubMemory.seen assertion would not
+    exercise it.
+    """
+    repo_path = tmp_path / "repos" / "nix"
+    (repo_path / ".agent-memory").mkdir(parents=True)
+    write_memory({"nix": repo_path}, "nix", "Stack takes 90s", "body text", "gotcha")
+
+    captured = {}
+    await _sup(tmp_path, MemoryStore(), captured).spawn(
+        "nix", "t", roots=_SAME_NAME_WATCH_ROOTS
+    )
+    prompt = captured["append_system_prompt"]
+    assert prompt.count("Stack takes 90s") == 1

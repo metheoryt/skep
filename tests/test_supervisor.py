@@ -203,3 +203,21 @@ async def test_spawn_with_a_refused_root_raises_root_error(
                 {"name": "../etc", "mode": "primary", "access": "ro"},
             ],
         )
+
+
+async def test_spawn_legacy_path_refuses_a_traversal_repo_name(
+    worker_config_no_memory, fake_sink
+):
+    # The `roots is None` (legacy) branch of Supervisor.spawn took `repo`
+    # verbatim from the wire and built a Workspace directly, skipping the
+    # same name validation the `roots` branch enforces via resolve_roots. A
+    # name like "../etc" must be refused here exactly as it already is on
+    # the roots branch above -- one validator, both branches.
+    cfg = worker_config_no_memory
+    reg = Registry.open(":memory:")
+    sup = Supervisor(
+        cfg, reg, fake_sink,
+        agent_factory=lambda **k: FakeAgent([]), worktree_factory=lambda *a: None,
+    )
+    with pytest.raises(RootError):
+        await sup.spawn("../etc", "t")

@@ -325,6 +325,19 @@ async def test_addendum_unions_roots(tmp_path):
     assert "fact in B" in addendum
 
 
+async def test_addendum_dedupes_a_root_path_repeated_in_the_read_list(tmp_path):
+    # The canonical `--watch` spawn emits two roots that share a NAME (rw own
+    # worktree's parent + ro watched checkout), and resolve_roots maps a name
+    # to repos_root/<name> -- so both entries land on the identical path, and
+    # supervisor.spawn's read list carries that path twice. Without a dedupe
+    # here, _load runs twice and every fact renders twice, silently halving
+    # the effective byte budget.
+    _write(tmp_path, "only", "Only Fact", "2026-07-09T00:00:00Z")
+    out = await MemoryStore().addendum_for([tmp_path, tmp_path])
+    assert out.count("[only]") == 1
+    assert out.count("Only Fact") == 1
+
+
 def test_write_memory_targets_named_project(tmp_path):
     a = tmp_path / "a"
     b = tmp_path / "b"

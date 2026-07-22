@@ -225,8 +225,16 @@ class MemoryStore:
         )
 
     async def addendum_for(self, root_paths: list[Path]) -> str | None:
+        # De-dupe, order-preserving: the canonical same-name `--watch` spawn
+        # hands this an rw root and a ro root that resolve to the IDENTICAL
+        # path (resolve_roots maps a name to repos_root/<name>), so a caller
+        # that unions roots for reads -- correctly, per
+        # test_addendum_still_reads_the_read_only_root -- would otherwise
+        # load and render every fact in that path twice, silently halving
+        # the byte budget in `render`.
+        deduped = dict.fromkeys(root_paths)
         facts: list[MemoryFact] = []
-        for repo_path in root_paths:
+        for repo_path in deduped:
             facts.extend(self._load(repo_path))
         # _load sorts within a root; re-sort the union so newest-first holds
         # across roots too.
