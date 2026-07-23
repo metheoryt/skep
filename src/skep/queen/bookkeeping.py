@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 """
 
-_ACTIVE = ("spawning", "running")
+_ACTIVE = ("spawning", "running", "parked")
 _COLUMNS = (
     "ref",
     "host",
@@ -31,6 +31,7 @@ _COLUMNS = (
     "topic_id",
     "activity_msg_id",
     "status",
+    "parked_until",
 )
 
 
@@ -46,6 +47,7 @@ class Entry:
     topic_id: int
     activity_msg_id: int | None
     status: str
+    parked_until: float | None
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -58,8 +60,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "UPDATE entries SET session_local_id = local_id"
             " WHERE session_local_id IS NULL"
         )
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        conn.commit()
+    if version < 2:
+        # v1 -> v2: a session can be parked (usage limit) and auto-resumed.
+        # parked_until is a POSIX wall-clock ts; NULL for every non-parked row.
+        conn.execute("ALTER TABLE entries ADD COLUMN parked_until REAL")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
 
 
 class Bookkeeping:
@@ -136,13 +142,30 @@ class Bookkeeping:
         """Point an existing session's row at a new invocation.
 
         The ref, the topic and the session id all stay put -- that is what
-        makes a topic follow a session across invocations.
+        makes a topic follow a session across invocations. Resuming clears any
+        park marker: the session is running again.
         """
         self._conn.execute(
-            "UPDATE entries SET local_id=?, status='running' WHERE ref=?",
+            "UPDATE entries SET local_id=?, status='running', parked_until=NULL"
+            " WHERE ref=?",
             (local_id, ref),
         )
         self._conn.commit()
+
+    def park(self, ref: int, until: float) -> None:
+        self._conn.execute(
+            "UPDATE entries SET status='parked', parked_until=? WHERE ref=?",
+            (until, ref),
+        )
+        self._conn.commit()
+
+    def parked_due(self, now: float) -> list[Entry]:
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE status='parked' AND parked_until <= ?"
+            " ORDER BY ref",
+            (now,),
+        ).fetchall()
+        return [self._row(r) for r in rows]
 
     def list_active(self) -> list[Entry]:
         placeholders = ",".join("?" for _ in _ACTIVE)

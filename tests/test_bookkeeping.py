@@ -120,3 +120,40 @@ def test_migration_backfills_existing_rows(tmp_path):
     bk2 = Bookkeeping.open(path)
     assert bk2.by_worker_task("g16", "work", 7).session_local_id == 7
     bk2.close()
+
+
+def test_park_sets_status_and_until():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "repo", "task", topic_id=10)
+    bk.park(ref, until=1000.0)
+    e = bk.get(ref)
+    assert e.status == "parked"
+    assert e.parked_until == 1000.0
+
+
+def test_parked_due_returns_only_ripe_rows():
+    bk = Bookkeeping.open(":memory:")
+    a = bk.add("h", "p", 1, "r", "t", topic_id=1)
+    b = bk.add("h", "p", 2, "r", "t", topic_id=2)
+    bk.park(a, until=100.0)
+    bk.park(b, until=300.0)
+    due = bk.parked_due(now=200.0)
+    assert [e.ref for e in due] == [a]
+
+
+def test_rebind_invocation_clears_parked_until():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "r", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+    bk.rebind_invocation(ref, local_id=2)
+    e = bk.get(ref)
+    assert e.status == "running"
+    assert e.parked_until is None
+    assert e.local_id == 2
+
+
+def test_list_active_includes_parked():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "r", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+    assert [e.ref for e in bk.list_active()] == [ref]
