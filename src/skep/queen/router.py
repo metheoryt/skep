@@ -87,9 +87,14 @@ class QueenRouter:
         entry = self._bk.get(ref)
         if entry is None:
             return False
-        # Guard: only a non-running session may resume. The first caller to
-        # rebind flips status to 'running' (Bookkeeping.rebind_invocation), so a
-        # racing manual /resume and the auto-sweep cannot double-invoke.
+        # Skip a session that is already running. This is a cheap filter, NOT a
+        # mutual-exclusion guard: nothing here flips the status. 'running' is set
+        # only when the worker's task_started event round-trips back into
+        # Bookkeeping.rebind_invocation, so between this read and that write
+        # there is a window as wide as a process spawn in which a second caller
+        # reads the same stale status and dispatches a second resume.
+        # Deduplication belongs in Supervisor.resume, which alone knows whether a
+        # session already has a live invocation. See Task 9 in the A3 plan.
         if entry.status == "running":
             return False
         handler = self._workers.get((entry.host, entry.profile))

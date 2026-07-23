@@ -128,10 +128,23 @@ Every seam here has a `spawn` twin already in the tree; A3 adds the `resume` sib
 5. **`rebind_invocation(ref, new_local_id)`** — **exists** — rebinds the *same* topic
    and clears `parked_until`. Output streams back where it parked.
 
-**The guard is the concurrency invariant.** Manual `/resume` and the sweep can race.
-`cmd_resume` resumes only from a non-running status, and `rebind_invocation` flips to
-`running` atomically. The first to rebind wins; the second sees `running` and no-ops.
-No double invocation.
+**The status check is a filter, not the concurrency invariant.** Manual `/resume` and
+the sweep can race, and `cmd_resume`'s `status != 'running'` check does **not**
+serialise them. It was originally specified as if it did — that was wrong, and the
+code now says so at `queen/router.py:cmd_resume`. `cmd_resume` never writes status;
+`running` is set only when the worker's `task_started` event round-trips back into
+`rebind_invocation`. Between the read and that write lies a window as wide as an agent
+process spawn, in which a second caller reads the same stale status and dispatches a
+second resume — two `claude --resume` processes sharing one `resume_token` and one
+worktree.
+
+**Deduplication belongs in `Supervisor.resume`**, the only place that knows whether a
+session already has a live invocation (`self._agents`), and the only place where the
+check and the claim can be atomic — the queen cannot know synchronously whether a
+resume landed, because `handler.resume()` is fire-and-forget and rejections return
+asynchronously. A queen-side journal claim is the wrong home: it would strand a
+session as `running` whenever the dispatch never lands, and `parked_due` would never
+retry it.
 
 ## 6. The sweep scheduler
 
@@ -162,7 +175,7 @@ instead of bespoke handling:
 | Queen restart | `parked_until` lives in the journal; the sweep just resumes finding due entries — no timer state to rebuild |
 | Worker at capacity | `CapacityError` → skipped, retried next tick |
 | Reset time guessed early | resume → runner re-hits the limit → re-parks with a fresh `parked_until` — self-correcting |
-| Manual `/resume` races the sweep | §5 status guard: second caller sees `running`, no-ops |
+| Manual `/resume` races the sweep | §5: the status check filters the common case but does NOT serialise the race — `Supervisor.resume` must reject a session that already has a live invocation |
 
 Config (env, `QueenConfig`): `SKEP_PARK_SWEEP_INTERVAL` (default 30 s). The sweep is
 idempotent and cheap — one indexed query per tick.
