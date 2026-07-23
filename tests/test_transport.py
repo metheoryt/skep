@@ -1,3 +1,5 @@
+import asyncio
+
 from skep.transport import InMemoryEventSink, SwitchableEventSink
 
 
@@ -16,7 +18,7 @@ class RecordingInbox:
     async def on_milestone(self, host, profile, local_id, text):
         self.calls.append(("milestone", host, profile, local_id, text))
 
-    async def on_done(self, host, profile, local_id, status, summary):
+    async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
         self.calls.append(("done", host, profile, local_id, status, summary))
 
 
@@ -117,3 +119,25 @@ async def test_switchable_forwards_session_local_id_to_target():
     s.target = rec
     await s.task_started(1, "nix", "t", 42)
     assert rec.session_local_id == 42
+
+
+class _RecordingInbox:
+    def __init__(self):
+        self.done_calls = []
+
+    async def on_task_started(self, *a, **k): ...
+    async def on_activity(self, *a, **k): ...
+    async def on_milestone(self, *a, **k): ...
+    async def on_spawn_rejected(self, *a, **k): ...
+
+    async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
+        self.done_calls.append((local_id, status, reset_at))
+
+
+def test_inmemory_sink_forwards_reset_at():
+    from skep.transport import InMemoryEventSink
+
+    inbox = _RecordingInbox()
+    sink = InMemoryEventSink(inbox, "h", "p")
+    asyncio.run(sink.done(7, "parked", "limit", reset_at=999.0))
+    assert inbox.done_calls == [(7, "parked", 999.0)]

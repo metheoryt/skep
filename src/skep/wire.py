@@ -79,8 +79,16 @@ def milestone_msg(local_id: int, text: str) -> dict[str, Any]:
     return {"t": MILESTONE, "local_id": local_id, "text": text}
 
 
-def done_msg(local_id: int, status: str, summary: str) -> dict[str, Any]:
-    return {"t": DONE, "local_id": local_id, "status": status, "summary": summary}
+def done_msg(
+    local_id: int, status: str, summary: str, reset_at: float | None = None
+) -> dict[str, Any]:
+    return {
+        "t": DONE,
+        "local_id": local_id,
+        "status": status,
+        "summary": summary,
+        "reset_at": reset_at,
+    }
 
 
 def spawn_rejected_msg(reason: str) -> dict[str, Any]:

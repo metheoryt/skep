@@ -176,6 +176,7 @@ class QueenWsServer:
                 int(msg["local_id"]),
                 str(msg["status"]),
                 str(msg["summary"]),
+                msg.get("reset_at"),
             )
         elif t == wire.SPAWN_REJECTED:
             await self._inbox.on_spawn_rejected(host, profile, str(msg["reason"]))
@@ -286,8 +287,10 @@ class WsEventSink:
     async def milestone(self, local_id: int, text: str) -> None:
         await self._send(wire.milestone_msg(local_id, text))
 
-    async def done(self, local_id: int, status: str, summary: str) -> None:
-        await self._send(wire.done_msg(local_id, status, summary))
+    async def done(
+        self, local_id: int, status: str, summary: str, reset_at: float | None = None
+    ) -> None:
+        await self._send(wire.done_msg(local_id, status, summary, reset_at))
 
 
 class WorkerWsClient:

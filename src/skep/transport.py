@@ -16,7 +16,9 @@ class EventSink(Protocol):
     ) -> None: ...
     async def activity(self, local_id: int, line: str) -> None: ...
     async def milestone(self, local_id: int, text: str) -> None: ...
-    async def done(self, local_id: int, status: str, summary: str) -> None: ...
+    async def done(
+        self, local_id: int, status: str, summary: str, reset_at: float | None = None
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -55,7 +57,13 @@ class QueenInbox(Protocol):
         self, host: str, profile: str, local_id: int, text: str
     ) -> None: ...
     async def on_done(
-        self, host: str, profile: str, local_id: int, status: str, summary: str
+        self,
+        host: str,
+        profile: str,
+        local_id: int,
+        status: str,
+        summary: str,
+        reset_at: float | None = None,
     ) -> None: ...
     async def on_spawn_rejected(self, host: str, profile: str, reason: str) -> None: ...
 
@@ -84,8 +92,12 @@ class InMemoryEventSink:
     async def milestone(self, local_id: int, text: str) -> None:
         await self._inbox.on_milestone(self._host, self._profile, local_id, text)
 
-    async def done(self, local_id: int, status: str, summary: str) -> None:
-        await self._inbox.on_done(self._host, self._profile, local_id, status, summary)
+    async def done(
+        self, local_id: int, status: str, summary: str, reset_at: float | None = None
+    ) -> None:
+        await self._inbox.on_done(
+            self._host, self._profile, local_id, status, summary, reset_at
+        )
 
 
 class SwitchableEventSink:
@@ -110,9 +122,11 @@ class SwitchableEventSink:
         if self.target is not None:
             await self.target.milestone(local_id, text)
 
-    async def done(self, local_id: int, status: str, summary: str) -> None:
+    async def done(
+        self, local_id: int, status: str, summary: str, reset_at: float | None = None
+    ) -> None:
         if self.target is not None:
-            await self.target.done(local_id, status, summary)
+            await self.target.done(local_id, status, summary, reset_at)
 
 
 class MailboxUnavailable(Exception):

@@ -70,7 +70,13 @@ class QueenSink:
         await self._gw.post(entry.topic_id, escape_md(text))
 
     async def on_done(
-        self, host: str, profile: str, local_id: int, status: str, summary: str
+        self,
+        host: str,
+        profile: str,
+        local_id: int,
+        status: str,
+        summary: str,
+        reset_at: float | None = None,
     ) -> None:
         entry = self._bk.by_worker_task(host, profile, local_id)
         if entry is None:

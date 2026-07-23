@@ -36,6 +36,19 @@ def test_all_builders_carry_a_tag():
         assert wire.decode(wire.encode(b)) == b
 
 
+def test_done_msg_carries_reset_at():
+    from skep import wire
+
+    msg = wire.done_msg(5, "parked", "limit", reset_at=1234.0)
+    assert msg["reset_at"] == 1234.0
+
+
+def test_done_msg_reset_at_defaults_none():
+    from skep import wire
+
+    assert wire.done_msg(5, "done", "ok")["reset_at"] is None
+
+
 def test_decode_rejects_non_dict():
     with pytest.raises(ValueError):
         wire.decode("[1, 2, 3]")
