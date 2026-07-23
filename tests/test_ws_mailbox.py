@@ -84,7 +84,7 @@ class _NullInbox:
     async def on_milestone(self, host, profile, local_id, text):
         pass
 
-    async def on_done(self, host, profile, local_id, status, summary):
+    async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
         pass
 
     async def on_spawn_rejected(self, host, profile, reason):

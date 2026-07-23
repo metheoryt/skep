@@ -32,7 +32,7 @@ class RecordingInbox:
     async def on_milestone(self, host, profile, local_id, text):
         self.events.append(("milestone", host, profile, local_id, text))
 
-    async def on_done(self, host, profile, local_id, status, summary):
+    async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
         self.events.append(("done", host, profile, local_id, status, summary))
 
     async def on_spawn_rejected(self, host, profile, reason):
