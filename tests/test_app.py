@@ -229,6 +229,7 @@ def _qcfg(**overrides):
 class _FakeRouter:
     def __init__(self):
         self.cmd_spawn = AsyncMock()
+        self.cmd_resume = AsyncMock(return_value=True)
 
 
 @pytest.fixture
@@ -242,17 +243,23 @@ def dispatcher(router):
 
 
 async def _send(dispatcher, text):
-    """Drive one owner-authored text message through a built Dispatcher."""
+    """Drive one owner-authored text message through a built Dispatcher.
+
+    Returns the AsyncMock standing in for Message.answer, so callers can
+    assert on what the bot replied.
+    """
     bot = Bot(token="123:abc")
     user = User(id=_OWNER_ID, is_bot=False, first_name="Owner")
     chat = Chat(id=1, type="private")
     message = Message(message_id=1, date=0, chat=chat, from_user=user, text=text)
     update = Update(update_id=1, message=message)
+    answer = AsyncMock()
     try:
-        with patch.object(Message, "answer", AsyncMock()):
+        with patch.object(Message, "answer", answer):
             await dispatcher.feed_update(bot, update)
     finally:
         await bot.session.close()
+    return answer
 
 
 async def test_spawn_command_with_watch_sends_two_roots(dispatcher, router):
@@ -273,4 +280,35 @@ async def test_spawn_command_without_watch_sends_no_roots(dispatcher, router):
     await _send(dispatcher, "/spawn g16 nix fix it")
     router.cmd_spawn.assert_awaited_once_with(
         "g16", "default", "nix", "fix it", roots=None
+    )
+
+
+# -- /resume dispatcher wiring -------------------------------------------
+
+
+async def test_resume_command_calls_cmd_resume(dispatcher, router):
+    answer = await _send(dispatcher, "/resume 5")
+    router.cmd_resume.assert_awaited_once_with(5, None)
+    answer.assert_awaited_once_with("Resuming ref 5", parse_mode=None)
+
+
+async def test_resume_command_with_model_flag(dispatcher, router):
+    answer = await _send(dispatcher, "/resume 5 --model opus")
+    router.cmd_resume.assert_awaited_once_with(5, "opus")
+    answer.assert_awaited_once_with("Resuming ref 5", parse_mode=None)
+
+
+async def test_resume_command_reports_failure(dispatcher, router):
+    router.cmd_resume.return_value = False
+    answer = await _send(dispatcher, "/resume 5")
+    answer.assert_awaited_once_with(
+        "No such session / already running", parse_mode=None
+    )
+
+
+async def test_resume_command_rejects_non_numeric(dispatcher, router):
+    answer = await _send(dispatcher, "/resume abc")
+    router.cmd_resume.assert_not_awaited()
+    answer.assert_awaited_once_with(
+        "Usage: /resume <ref> [--model <m>]", parse_mode=None
     )

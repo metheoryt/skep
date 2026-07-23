@@ -195,6 +195,25 @@ def build_dispatcher(
         ok = await router.cmd_kill(int(command.args.strip()))
         await message.answer("Killed" if ok else "No such task", parse_mode=None)
 
+    @dp.message(Command("resume"), F.func(owner_only))
+    async def _resume(message: Message, command: CommandObject) -> None:
+        args = (command.args or "").split()
+        model: str | None = None
+        if "--model" in args:
+            i = args.index("--model")
+            model = args[i + 1] if i + 1 < len(args) else None
+            args = args[:i] + args[i + 2 :]
+        if len(args) != 1 or not args[0].isdigit():
+            await message.answer(
+                "Usage: /resume <ref> [--model <m>]", parse_mode=None
+            )
+            return
+        ok = await router.cmd_resume(int(args[0]), model)
+        await message.answer(
+            f"Resuming ref {args[0]}" if ok else "No such session / already running",
+            parse_mode=None,
+        )
+
     @dp.message(Command("panic"), F.func(owner_only))
     async def _panic(message: Message) -> None:
         n = await router.cmd_panic()
