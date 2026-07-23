@@ -53,6 +53,9 @@ class QueenConfig:
     mailbox_body_cap: int = 16384
     # How often the queen retries pending CEO mail whose push failed (0 = off)
     mailbox_ceo_retry_interval: float = 30.0
+    # Usage-limit park/resume knobs
+    park_sweep_interval: float = 30.0
+    park_default_backoff: float = 3600.0
 
 
 def load_worker_config(env: Mapping[str, str]) -> WorkerConfig:
@@ -102,4 +105,6 @@ def load_queen_config(env: Mapping[str, str]) -> QueenConfig:
         mailbox_ceo_retry_interval=float(
             env.get("SKEP_MAILBOX_CEO_RETRY_INTERVAL", "30")
         ),
+        park_sweep_interval=float(env.get("SKEP_PARK_SWEEP_INTERVAL", "30")),
+        park_default_backoff=float(env.get("SKEP_PARK_DEFAULT_BACKOFF", "3600")),
     )

@@ -156,6 +156,22 @@ def test_managers_parsed_and_overrides():
     assert cfg.mailbox_body_cap == 1024
 
 
+def test_park_knobs_default():
+    cfg = load_queen_config(_base_env())
+    assert cfg.park_sweep_interval == 30.0
+    assert cfg.park_default_backoff == 3600.0
+
+
+def test_park_knobs_overrides():
+    env = _base_env() | {
+        "SKEP_PARK_SWEEP_INTERVAL": "5",
+        "SKEP_PARK_DEFAULT_BACKOFF": "120",
+    }
+    cfg = load_queen_config(env)
+    assert cfg.park_sweep_interval == 5.0
+    assert cfg.park_default_backoff == 120.0
+
+
 def test_memory_enabled_defaults_true():
     env = _worker_env()
     assert load_worker_config(env).memory_enabled is True

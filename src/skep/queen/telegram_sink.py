@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import random
+import time
+from collections.abc import Callable
+from datetime import datetime
+
 from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.mailbox import MailboxService
@@ -14,10 +19,17 @@ class QueenSink:
         gateway: Gateway,
         bookkeeping: Bookkeeping,
         mailbox_service: MailboxService | None = None,
+        *,
+        park_default_backoff: float = 3600.0,
+        now: Callable[[], float] = time.time,
+        jitter: Callable[[], float] = lambda: random.uniform(0.0, 60.0),
     ) -> None:
         self._gw = gateway
         self._bk = bookkeeping
         self._mailbox_service = mailbox_service
+        self._park_default_backoff = park_default_backoff
+        self._now = now
+        self._jitter = jitter
 
     async def on_task_started(
         self,
@@ -80,6 +92,19 @@ class QueenSink:
     ) -> None:
         entry = self._bk.by_worker_task(host, profile, local_id)
         if entry is None:
+            return
+        if status == "parked":
+            base = (
+                reset_at
+                if reset_at is not None
+                else self._now() + self._park_default_backoff
+            )
+            until = base + self._jitter()
+            self._bk.park(entry.ref, until)
+            when = datetime.fromtimestamp(until).strftime("%H:%M")
+            await self._gw.post(
+                entry.topic_id, escape_md(f"⏸ parked (usage limit) · resumes ~{when}")
+            )
             return
         self._bk.set_status(entry.ref, status)
         if self._mailbox_service is not None:

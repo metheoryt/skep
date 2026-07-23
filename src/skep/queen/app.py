@@ -40,7 +40,12 @@ def build_queen(
     # group's General topic (message_thread_id=None), same destination
     # used for other queen-level notices.
     mailbox_service = build_mailbox_service(qcfg, gateway, bk, mailbox)
-    sink = QueenSink(gateway, bk, mailbox_service=mailbox_service)
+    sink = QueenSink(
+        gateway,
+        bk,
+        mailbox_service=mailbox_service,
+        park_default_backoff=qcfg.park_default_backoff,
+    )
     router = QueenRouter(bk)
     app = web.Application()
     QueenWsServer(

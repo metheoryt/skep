@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -120,3 +121,69 @@ async def test_reattach_of_the_same_invocation_is_still_idempotent():
     await sink.on_task_started("g16", "work", 5, "nix", "t", session_local_id=5)
     await sink.on_task_started("g16", "work", 5, "nix", "t", session_local_id=5)
     gw.create_topic.assert_awaited_once()
+
+
+def _sink_with_entry():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "repo", "task", topic_id=100)
+    gw = _FakeGateway()
+    sink = QueenSink(gw, bk, park_default_backoff=3600.0,
+                     now=lambda: 1000.0, jitter=lambda: 0.0)
+    return bk, ref, gw, sink
+
+
+class _FakeGateway:
+    def __init__(self):
+        self.posts = []
+
+    async def create_topic(self, name):
+        return 100
+
+    async def post(self, topic_id, text):
+        self.posts.append((topic_id, text))
+        return 1
+
+    async def edit(self, *a, **k): ...
+
+
+def test_parked_done_parks_with_known_reset():
+    bk, ref, gw, sink = _sink_with_entry()
+    asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=5000.0))
+    e = bk.get(ref)
+    assert e.status == "parked"
+    assert e.parked_until == 5000.0
+    assert gw.posts  # a "resumes ~..." notice was posted to the topic
+
+
+def test_parked_done_uses_backoff_when_reset_unknown():
+    bk, ref, gw, sink = _sink_with_entry()
+    asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=None))
+    e = bk.get(ref)
+    assert e.parked_until == 1000.0 + 3600.0  # now + backoff, jitter=0
+
+
+def test_parked_done_keeps_mailbox():
+    bk, ref, gw, sink = _sink_with_entry()
+
+    class _MB:
+        def __init__(self): self.gone = []
+        async def handle_recipient_gone(self, ref): self.gone.append(ref)
+
+    mb = _MB()
+    sink._mailbox_service = mb
+    asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=5000.0))
+    assert mb.gone == []  # parked session's mailbox is NOT torn down
+
+
+def test_ordinary_done_still_sets_status_and_clears_mailbox():
+    bk, ref, gw, sink = _sink_with_entry()
+
+    class _MB:
+        def __init__(self): self.gone = []
+        async def handle_recipient_gone(self, ref): self.gone.append(ref)
+
+    mb = _MB()
+    sink._mailbox_service = mb
+    asyncio.run(sink.on_done("h", "p", 1, "done", "ok", reset_at=None))
+    assert bk.get(ref).status == "done"
+    assert mb.gone == [ref]
