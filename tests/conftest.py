@@ -83,8 +83,8 @@ class RecordingSink:
     async def milestone(self, local_id, text):
         self.events.append(("milestone", local_id, text))
 
-    async def done(self, local_id, status, summary):
-        self.events.append(("done", local_id, status, summary))
+    async def done(self, local_id, status, summary, reset_at=None):
+        self.events.append(("done", local_id, status, summary, reset_at))
 
 
 @pytest.fixture

@@ -54,7 +54,35 @@ async def test_run_events_emits_activity_milestone_done(tmp_path):
     assert task.resume_token == "s9"
     kinds = [e[0] for e in sink.events]
     assert "activity" in kinds and "milestone" in kinds and "done" in kinds
-    assert ("done", tid, "done", "finished") in sink.events
+    assert ("done", tid, "done", "finished", None) in sink.events
+
+
+async def test_run_events_parks_on_usage_limit(tmp_path):
+    cfg = _cfg(tmp_path)
+    reg = Registry.open(":memory:")
+    sink = RecordingSink()
+    events = [
+        Event(kind="system", session_id="tok-1"),
+        Event(
+            kind="result",
+            text="Claude usage limit reached",
+            is_error=True,
+            raw={"subtype": "usage_limit", "reset_at": 5000},
+        ),
+    ]
+    agent = FakeAgent(events)
+    sup = Supervisor(cfg, reg, sink, agent_factory=lambda **k: agent,
+                     worktree_factory=lambda *a, **k: None)
+    tid = reg.add_task("nix", "t", str(tmp_path / "wt"))
+
+    await sup.run_events(tid, agent)
+
+    task = reg.get_task(tid)
+    assert task.status == "parked"
+    assert task.resume_token == "tok-1"
+    assert (
+        "done", tid, "parked", "Claude usage limit reached", 5000.0
+    ) in sink.events
 
 
 async def test_spawn_rejects_over_capacity(tmp_path):

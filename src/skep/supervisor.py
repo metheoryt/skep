@@ -12,6 +12,7 @@ from skep.config import WorkerConfig
 from skep.db import Registry, Task
 from skep.formatting import activity_line, milestone_message
 from skep.memory import MemoryProbe
+from skep.stream import detect_usage_limit
 from skep.transport import EventSink, MailboxClient
 from skep.worker.mcp_config import write_mcp_config
 from skep.worker.mcp_shim import MailboxShim
@@ -310,6 +311,7 @@ class Supervisor:
         terminal = "done"
         saw_result = False
         summary = ""
+        park_reset: float | None = None
         try:
             async for ev in agent.events():
                 if ev.kind == "system" and ev.session_id:
@@ -321,7 +323,12 @@ class Supervisor:
                         task_id,
                         resume_token=ev.session_id or self._task(task_id).resume_token,
                     )
-                    terminal = "failed" if ev.is_error else "done"
+                    limit = detect_usage_limit(ev)
+                    if limit is not None:
+                        terminal = "parked"
+                        park_reset = limit.reset_at
+                    else:
+                        terminal = "failed" if ev.is_error else "done"
 
                 line = activity_line(ev)
                 if line is not None:
@@ -347,6 +354,7 @@ class Supervisor:
         finally:
             if self._task(task_id).status == "killed":
                 terminal = "killed"
+                park_reset = None
             self._reg.update(task_id, status=terminal)
             self._agents.pop(task_id, None)
             shim = self._shims.pop(task_id, None)
@@ -358,7 +366,7 @@ class Supervisor:
                         task_id, "error", f"mailbox shim stop failed: {exc}"
                     )
             _ = activity_started  # activity presence is tracked by the queen
-            await self._sink.done(task_id, terminal, summary)
+            await self._sink.done(task_id, terminal, summary, reset_at=park_reset)
 
     async def kill(self, task_id: int) -> bool:
         agent = self._agents.get(task_id)
