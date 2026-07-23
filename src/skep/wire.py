@@ -15,6 +15,7 @@ SPAWN = "spawn"
 KILL = "kill"
 PANIC = "panic"
 LS_REQUEST = "ls_request"
+RESUME = "resume"
 
 
 def encode(msg: dict[str, Any]) -> str:
@@ -112,6 +113,10 @@ def panic_msg() -> dict[str, Any]:
 
 def ls_request_msg() -> dict[str, Any]:
     return {"t": LS_REQUEST}
+
+
+def resume_msg(session_local_id: int, model: str | None = None) -> dict[str, Any]:
+    return {"t": RESUME, "session_local_id": session_local_id, "model": model}
 
 
 MAILBOX_SEND = "mailbox_send"

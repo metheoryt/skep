@@ -50,6 +50,10 @@ class RemoteWorker:
         await self._ws.send_str(wire.encode(wire.panic_msg()))
         return 1
 
+    async def resume(self, session_local_id: int, *, model: str | None = None) -> int:
+        await self._ws.send_str(wire.encode(wire.resume_msg(session_local_id, model)))
+        return 0
+
 
 class QueenWsServer:
     def __init__(
@@ -416,6 +420,13 @@ class WorkerWsClient:
             await self._sup.kill(int(msg["task_id"]))
         elif t == wire.PANIC:
             await self._sup.panic()
+        elif t == wire.RESUME:
+            try:
+                await self._sup.resume(
+                    int(msg["session_local_id"]), model=msg.get("model")
+                )
+            except (CapacityError, ValueError) as exc:
+                await ws.send_str(wire.encode(wire.spawn_rejected_msg(str(exc))))
 
 
 class _MailboxWs(Protocol):

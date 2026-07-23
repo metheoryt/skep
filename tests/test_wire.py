@@ -30,6 +30,7 @@ def test_all_builders_carry_a_tag():
         wire.kill_msg(3),
         wire.panic_msg(),
         wire.ls_request_msg(),
+        wire.resume_msg(1),
     ]
     for b in builders:
         assert "t" in b
@@ -71,3 +72,12 @@ def test_spawn_msg_carries_roots():
 def test_spawn_msg_roots_default_to_none():
     msg = wire.decode(wire.encode(wire.spawn_msg("nix", "t")))
     assert msg.get("roots") is None
+
+
+def test_resume_msg_shape():
+    m = wire.resume_msg(42, model="opus")
+    assert m == {"t": "resume", "session_local_id": 42, "model": "opus"}
+
+
+def test_resume_msg_model_optional():
+    assert wire.resume_msg(42)["model"] is None

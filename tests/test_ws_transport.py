@@ -214,6 +214,7 @@ class FakeSupervisor:
         self.roots_seen: list[list[dict] | None] = []
         self.killed: list[int] = []
         self.panics = 0
+        self.resumed: list[tuple[int, str | None]] = []
         self._capacity_ok = capacity_ok
 
     def list_active(self):
@@ -234,6 +235,10 @@ class FakeSupervisor:
     async def panic(self):
         self.panics += 1
         return 0
+
+    async def resume(self, session_local_id, *, model=None):
+        self.resumed.append((session_local_id, model))
+        return 2
 
 
 def _wcfg(url):
@@ -311,6 +316,38 @@ async def test_worker_client_dispatches_spawn_command_with_roots():
     # The roots list must arrive intact -- same shape, same content -- on
     # the far side of the real WebSocket, not just through the codec.
     assert sup.roots_seen == [roots]
+
+
+async def test_resume_frame_reaches_supervisor():
+    # cmd_resume doesn't exist on QueenRouter yet (Task 7) -- reach for the
+    # registered RemoteWorker the same way test_router.py:101 does, and drive
+    # its resume() directly, the way router.cmd_spawn drives RemoteWorker.spawn
+    # in the tests above.
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor()
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s")
+    try:
+        async with aiohttp.ClientSession() as sess:
+            task = asyncio.create_task(client.run_once(sess, url))
+            handler = None
+            for _ in range(100):
+                handler = router._workers.get(("g16", "work"))
+                if handler is not None:
+                    break
+                await asyncio.sleep(0.01)
+            assert handler is not None
+            await handler.resume(7, model="opus")
+            for _ in range(100):
+                if sup.resumed:
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+    finally:
+        await server.close()
+    assert sup.resumed == [(7, "opus")]
 
 
 async def test_worker_client_reports_capacity_rejection():
