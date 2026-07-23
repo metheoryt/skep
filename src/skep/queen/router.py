@@ -83,6 +83,21 @@ class QueenRouter:
         await handler.kill(entry.local_id)
         return True
 
+    async def cmd_resume(self, ref: int, model: str | None = None) -> bool:
+        entry = self._bk.get(ref)
+        if entry is None:
+            return False
+        # Guard: only a non-running session may resume. The first caller to
+        # rebind flips status to 'running' (Bookkeeping.rebind_invocation), so a
+        # racing manual /resume and the auto-sweep cannot double-invoke.
+        if entry.status == "running":
+            return False
+        handler = self._workers.get((entry.host, entry.profile))
+        if handler is None:
+            return False
+        await handler.resume(entry.session_local_id, model=model)
+        return True
+
     async def cmd_panic(self) -> int:
         for handler in list(self._workers.values()):
             await handler.panic()

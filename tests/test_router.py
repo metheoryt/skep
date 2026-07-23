@@ -53,6 +53,42 @@ async def test_kill_unknown_ref_returns_false():
     assert await router.cmd_kill(999) is False
 
 
+async def test_cmd_resume_routes_to_worker():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "r", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+    router = QueenRouter(bk)
+    handler = _handler()
+    router.register("h", "p", handler)
+    ok = await router.cmd_resume(ref)
+    assert ok is True
+    handler.resume.assert_awaited_once_with(1, model=None)
+
+
+async def test_cmd_resume_unknown_ref_is_false():
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    assert await router.cmd_resume(999) is False
+
+
+async def test_cmd_resume_skips_running_entry():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "r", "t", topic_id=1)  # status defaults to running
+    router = QueenRouter(bk)
+    handler = _handler()
+    router.register("h", "p", handler)
+    ok = await router.cmd_resume(ref)
+    assert ok is False
+    handler.resume.assert_not_awaited()
+
+
+async def test_cmd_resume_no_worker_registered_is_false():
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "r", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+    router = QueenRouter(bk)  # no handler registered for (h, p)
+    assert await router.cmd_resume(ref) is False
+
+
 async def test_panic_hits_all_workers():
     router = QueenRouter(Bookkeeping.open(":memory:"))
     h1, h2 = _handler(), _handler()
