@@ -1,6 +1,6 @@
 import json
 
-from skep.stream import Event, parse_event
+from skep.stream import Event, UsageLimit, detect_usage_limit, parse_event
 
 
 def test_blank_line_returns_none():
@@ -85,3 +85,31 @@ def test_non_dict_json_returns_none():
     assert parse_event("[1,2,3]") is None
     assert parse_event("42") is None
     assert parse_event("\"hi\"") is None
+
+
+def _result(text: str, *, is_error: bool = True, raw: dict | None = None) -> Event:
+    return Event(kind="result", text=text, is_error=is_error, raw=raw or {})
+
+
+def test_non_error_result_is_not_a_limit():
+    assert detect_usage_limit(_result("all done", is_error=False)) is None
+
+
+def test_ordinary_error_is_not_a_limit():
+    assert detect_usage_limit(_result("tool exploded")) is None
+
+
+def test_limit_with_epoch_reset_in_raw():
+    # The runner surfaces a machine-readable reset epoch when it has one.
+    ev = _result(
+        "Claude usage limit reached",
+        raw={"subtype": "usage_limit", "reset_at": 1_700_000_000},
+    )
+    got = detect_usage_limit(ev)
+    assert got == UsageLimit(reset_at=1_700_000_000.0)
+
+
+def test_limit_without_reset_yields_unknown():
+    ev = _result("Claude usage limit reached")
+    got = detect_usage_limit(ev)
+    assert got == UsageLimit(reset_at=None)
