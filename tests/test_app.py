@@ -45,7 +45,7 @@ class FakeQueenSink:
     async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
         pass
 
-    async def on_spawn_rejected(self, host, profile, reason):
+    async def on_spawn_rejected(self, host, profile, reason, action="spawn"):
         pass
 
 

@@ -183,7 +183,9 @@ class QueenWsServer:
                 msg.get("reset_at"),
             )
         elif t == wire.SPAWN_REJECTED:
-            await self._inbox.on_spawn_rejected(host, profile, str(msg["reason"]))
+            await self._inbox.on_spawn_rejected(
+                host, profile, str(msg["reason"]), msg.get("action", "spawn")
+            )
         elif t == wire.MAILBOX_SEND:
             await self._dispatch_mailbox_send(host, profile, ws, msg)
         elif t == wire.INBOX_READ:
@@ -426,7 +428,9 @@ class WorkerWsClient:
                     int(msg["session_local_id"]), model=msg.get("model")
                 )
             except (CapacityError, ValueError) as exc:
-                await ws.send_str(wire.encode(wire.spawn_rejected_msg(str(exc))))
+                await ws.send_str(
+                    wire.encode(wire.spawn_rejected_msg(str(exc), action="resume"))
+                )
 
 
 class _MailboxWs(Protocol):

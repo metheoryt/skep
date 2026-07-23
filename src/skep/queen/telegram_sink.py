@@ -110,6 +110,8 @@ class QueenSink:
         if self._mailbox_service is not None:
             await self._mailbox_service.handle_recipient_gone(entry.ref)
 
-    async def on_spawn_rejected(self, host: str, profile: str, reason: str) -> None:
-        text = escape_md(f"spawn on {host}/{profile} rejected: {reason}")
+    async def on_spawn_rejected(
+        self, host: str, profile: str, reason: str, action: str = "spawn"
+    ) -> None:
+        text = escape_md(f"{action} on {host}/{profile} rejected: {reason}")
         await self._gw.post(None, text)

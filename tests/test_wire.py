@@ -50,6 +50,15 @@ def test_done_msg_reset_at_defaults_none():
     assert wire.done_msg(5, "done", "ok")["reset_at"] is None
 
 
+def test_spawn_rejected_msg_action_defaults_spawn():
+    assert wire.spawn_rejected_msg("at capacity")["action"] == "spawn"
+
+
+def test_spawn_rejected_msg_carries_action():
+    msg = wire.spawn_rejected_msg("no such session: 7", action="resume")
+    assert msg["action"] == "resume"
+
+
 def test_decode_rejects_non_dict():
     with pytest.raises(ValueError):
         wire.decode("[1, 2, 3]")

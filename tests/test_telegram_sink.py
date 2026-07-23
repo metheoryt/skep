@@ -15,6 +15,24 @@ def _gateway():
     return gw
 
 
+async def test_spawn_rejected_renders_spawn_verb_by_default():
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+    await sink.on_spawn_rejected("g16", "work", "at capacity")
+    gw.post.assert_awaited_once_with(None, "spawn on g16/work rejected: at capacity")
+
+
+async def test_spawn_rejected_renders_resume_verb_when_specified():
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+    await sink.on_spawn_rejected(
+        "g16", "work", "no such session: 7", action="resume"
+    )
+    gw.post.assert_awaited_once_with(
+        None, "resume on g16/work rejected: no such session: 7"
+    )
+
+
 async def test_task_started_creates_topic_and_entry():
     gw, bk = _gateway(), Bookkeeping.open(":memory:")
     sink = QueenSink(gw, bk)

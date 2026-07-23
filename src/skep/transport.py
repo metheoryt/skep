@@ -68,7 +68,9 @@ class QueenInbox(Protocol):
         summary: str,
         reset_at: float | None = None,
     ) -> None: ...
-    async def on_spawn_rejected(self, host: str, profile: str, reason: str) -> None: ...
+    async def on_spawn_rejected(
+        self, host: str, profile: str, reason: str, action: str = "spawn"
+    ) -> None: ...
 
 
 class InMemoryEventSink:

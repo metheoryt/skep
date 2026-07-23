@@ -35,8 +35,8 @@ class RecordingInbox:
     async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
         self.events.append(("done", host, profile, local_id, status, summary))
 
-    async def on_spawn_rejected(self, host, profile, reason):
-        self.events.append(("spawn_rejected", host, profile, reason))
+    async def on_spawn_rejected(self, host, profile, reason, action="spawn"):
+        self.events.append(("spawn_rejected", host, profile, reason, action))
 
 
 async def _serve(router, inbox, secret="s"):
@@ -209,13 +209,14 @@ async def test_wrong_secret_is_rejected():
 class FakeSupervisor:
     """Stands in for Supervisor as a CommandHandler + list_active source."""
 
-    def __init__(self, capacity_ok=True):
+    def __init__(self, capacity_ok=True, resume_ok=True):
         self.spawned: list[tuple[str, str]] = []
         self.roots_seen: list[list[dict] | None] = []
         self.killed: list[int] = []
         self.panics = 0
         self.resumed: list[tuple[int, str | None]] = []
         self._capacity_ok = capacity_ok
+        self._resume_ok = resume_ok
 
     def list_active(self):
         return []
@@ -237,6 +238,8 @@ class FakeSupervisor:
         return 0
 
     async def resume(self, session_local_id, *, model=None):
+        if not self._resume_ok:
+            raise ValueError(f"no such session: {session_local_id}")
         self.resumed.append((session_local_id, model))
         return 2
 
@@ -373,7 +376,46 @@ async def test_worker_client_reports_capacity_rejection():
             task.cancel()
     finally:
         await server.close()
-    assert any(e[0] == "spawn_rejected" for e in inbox.events)
+    rejections = [e for e in inbox.events if e[0] == "spawn_rejected"]
+    assert rejections
+    # Symmetric E2E pin for the wrong-verb fix (task 8): a rejected /spawn
+    # must still carry the "spawn" verb all the way through the real send
+    # site -> wire frame -> dispatch -> inbox.
+    assert rejections[0][4] == "spawn"
+
+
+async def test_worker_client_reports_resume_rejection_with_resume_verb():
+    """Task 8 carry-over fix, pinned end-to-end: a rejected /resume must
+    render with the "resume" verb, not "spawn" -- exercised through the
+    real RESUME send site (WorkerWsClient._on_command), not by constructing
+    the frame or calling the sink directly."""
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor(resume_ok=False)
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s")
+    try:
+        async with aiohttp.ClientSession() as sess:
+            task = asyncio.create_task(client.run_once(sess, url))
+            handler = None
+            for _ in range(100):
+                handler = router._workers.get(("g16", "work"))
+                if handler is not None:
+                    break
+                await asyncio.sleep(0.01)
+            assert handler is not None
+            await handler.resume(7, model="opus")
+            for _ in range(100):
+                if any(e[0] == "spawn_rejected" for e in inbox.events):
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+    finally:
+        await server.close()
+    rejections = [e for e in inbox.events if e[0] == "spawn_rejected"]
+    assert rejections
+    assert rejections[0][4] == "resume"
 
 
 async def test_worker_sends_heartbeat():
@@ -528,3 +570,28 @@ async def test_replay_tolerates_a_missing_session_local_id():
         "g16", "work", [{"local_id": 9, "repo": "nix", "title": "t"}]
     )
     inbox.on_task_started.assert_awaited_once_with("g16", "work", 9, "nix", "t", None)
+
+
+async def test_dispatch_spawn_rejected_defaults_action_for_legacy_frame():
+    """A frame from a worker built before `action` existed omits the key --
+    the dispatch must still forward, defaulting to 'spawn'."""
+    inbox = AsyncMock()
+    await _server(inbox)._dispatch(
+        "g16", "work", None, {"t": wire.SPAWN_REJECTED, "reason": "at capacity"}
+    )
+    inbox.on_spawn_rejected.assert_awaited_once_with(
+        "g16", "work", "at capacity", "spawn"
+    )
+
+
+async def test_dispatch_spawn_rejected_forwards_action():
+    inbox = AsyncMock()
+    await _server(inbox)._dispatch(
+        "g16",
+        "work",
+        None,
+        {"t": wire.SPAWN_REJECTED, "reason": "no such session: 7", "action": "resume"},
+    )
+    inbox.on_spawn_rejected.assert_awaited_once_with(
+        "g16", "work", "no such session: 7", "resume"
+    )

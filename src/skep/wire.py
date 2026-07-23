@@ -92,8 +92,10 @@ def done_msg(
     }
 
 
-def spawn_rejected_msg(reason: str) -> dict[str, Any]:
-    return {"t": SPAWN_REJECTED, "reason": reason}
+def spawn_rejected_msg(reason: str, action: str = "spawn") -> dict[str, Any]:
+    """`action` names the command that was rejected ("spawn" or "resume"),
+    so the queen's rendering can use the right verb (Sessions A3 task 8)."""
+    return {"t": SPAWN_REJECTED, "reason": reason, "action": action}
 
 
 def spawn_msg(
