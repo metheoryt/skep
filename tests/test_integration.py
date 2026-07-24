@@ -330,10 +330,14 @@ async def test_usage_limit_parks_then_sweep_resumes(tmp_path, git_repo):
     between the two stubs is production code.
     """
     repo_name = git_repo.name
-    reset_at = 1000.0  # POSIX ts, deliberately in the past
+    reset_at = 1000.0  # POSIX ts; already past by the time the sweep runs
     server, url, router, bk, gw = await _start_queen(
         # No jitter: parked_until must be exactly the reset the worker reported.
-        sink_kwargs={"jitter": lambda: 0.0},
+        # The sink's clock is frozen at 0 so the forward floor (_MIN_PARK_BACKOFF,
+        # which clamps a park deadline that is already in the past) never bites:
+        # `reset_at` here is past only relative to the SWEEP's clock, not the
+        # sink's, which is the shape a real park has.
+        sink_kwargs={"jitter": lambda: 0.0, "now": lambda: 0.0},
     )
     wcfg = WorkerConfig(
         host="g16", profile="work", claude_config_dir=None,

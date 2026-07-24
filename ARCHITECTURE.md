@@ -108,8 +108,13 @@ does (it skips the mailbox `handle_recipient_gone` teardown on a park), and
     the reset through `EventSink.done(..., reset_at=)` — which the `done` wire
     frame also carries.
 12. `QueenSink.on_done` parks: `parked_until` is `reset_at` (or, when the runner
-    gave none, `now + SKEP_PARK_DEFAULT_BACKOFF`, 1 h) plus 0–60 s of jitter,
-    written by `Bookkeeping.park(ref, until)`.
+    gave none, `now + SKEP_PARK_DEFAULT_BACKOFF`, 1 h), **floored forward to at
+    least `now + _MIN_PARK_BACKOFF` (60 s)**, plus 0–60 s of jitter, written by
+    `Bookkeeping.park(ref, until)`. The floor exists because `detect_usage_limit`
+    is unverified (§9): a `reset_at` that is really a *duration*, or one already
+    elapsed, would park in the past — due on the very next sweep tick, resumed
+    into the same limit, re-parked at the same instant, and posting a fresh
+    `⏸ parked` notice every 30 s forever.
     The topic gets one `⏸ parked (usage limit) · resumes ~HH:MM` post. The jitter
     stops a fleet that parked together from resuming in lockstep onto the same
     limit.

@@ -217,6 +217,14 @@ never manual-only.
 jitter (0–60 s) so a fleet that parked together does not resume in lockstep and
 re-hit the same account limit simultaneously.
 
+**Forward floor (added at build time).** A parsed `reset_at` is additionally clamped
+to at least `now + 60 s` (`telegram_sink._MIN_PARK_BACKOFF`). Until §8.1 lands the
+detector is a guess, so `reset_at` is not *known* to be a POSIX epoch — a
+duration-shaped value (`3600`) parks in 1970, which is due on the next sweep tick:
+resume → re-hit the limit → re-park at the same past instant → post another `parked`
+notice, every sweep interval forever. Jitter alone does not prevent that; the floor
+does. An already-elapsed reset and a clock skew have the same shape.
+
 Only a *recognised* limit parks. An unrecognised error result still becomes
 `failed` — A3 adds no new way to mask a genuine failure as a park.
 

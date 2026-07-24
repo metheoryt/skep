@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from skep.queen.bookkeeping import Bookkeeping
-from skep.queen.telegram_sink import QueenSink
+from skep.queen.telegram_sink import _MIN_PARK_BACKOFF, QueenSink
 
 
 def _gateway():
@@ -203,6 +203,39 @@ def test_parked_done_uses_backoff_when_reset_unknown():
     asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=None))
     e = bk.get(ref)
     assert e.parked_until == 1000.0 + 3600.0  # now + backoff, jitter=0
+
+
+def test_parked_done_clamps_a_past_reset_forward():
+    """`reset_at` comes from an UNVERIFIED detector (A3 spec 8.1): the real
+    usage-limit payload was never captured, so it may not be a POSIX epoch at
+    all. A duration-shaped value parks in 1970 -- due on the very next sweep
+    tick, forever: resume -> re-hit the limit -> re-park -> post another
+    "parked" notice. A forward floor makes that impossible."""
+    now = 1_700_000_000.0
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "repo", "task", topic_id=100)
+    sink = QueenSink(_FakeGateway(), bk, now=lambda: now, jitter=lambda: 0.0)
+    # 3600 read as a DURATION, not an epoch -- the shape this branch guesses at.
+    asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=3600.0))
+    assert bk.get(ref).parked_until >= now + _MIN_PARK_BACKOFF
+
+
+def test_parked_done_leaves_a_future_reset_untouched():
+    """The floor is a floor, not a delay: a sane reset is used verbatim."""
+    bk, ref, gw, sink = _sink_with_entry()   # now = 1000.0, jitter = 0
+    asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=5000.0))
+    assert bk.get(ref).parked_until == 5000.0
+
+
+def test_parked_until_carries_jitter():
+    """Spec 7's anti-lockstep property: a fleet that parked together must not
+    resume in lockstep onto the same account limit. Every parked_until -- parsed
+    reset or defaulted backoff -- carries positive jitter."""
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "repo", "task", topic_id=100)
+    sink = QueenSink(_FakeGateway(), bk, now=lambda: 1000.0, jitter=lambda: 42.0)
+    asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=5000.0))
+    assert bk.get(ref).parked_until == 5042.0
 
 
 def test_parked_done_keeps_mailbox():

@@ -13,6 +13,11 @@ from skep.telegram_gw import Gateway
 
 log = logging.getLogger(__name__)
 
+# Smallest distance into the future a park deadline may land. Deliberately a
+# flat constant and not derived from the sweep interval: the sink does not know
+# it (only queen/assembly.py does), and this is a sanity floor, not a schedule.
+_MIN_PARK_BACKOFF = 60.0
+
 
 class QueenSink:
     """Implements QueenInbox: renders worker domain events into Telegram topics."""
@@ -102,6 +107,15 @@ class QueenSink:
                 if reset_at is not None
                 else self._now() + self._park_default_backoff
             )
+            # Floor the deadline forward. `reset_at` reaches us from
+            # stream.detect_usage_limit, which has never met a real usage-limit
+            # event (A3 spec 8.1) -- so it is not KNOWN to be a POSIX epoch. If
+            # the real payload turns out to carry a duration ("3600"), every
+            # park would land in 1970: due on the next sweep tick, resumed into
+            # the same limit, re-parked at the same past instant, and a fresh
+            # "parked" notice posted to the topic -- every 30 s, forever. A
+            # clock skew or a provider's already-elapsed reset does the same.
+            base = max(base, self._now() + _MIN_PARK_BACKOFF)
             until = base + self._jitter()
             self._bk.park(entry.ref, until)
             when = datetime.fromtimestamp(until).strftime("%H:%M")
