@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from skep.formatting import escape_md
@@ -73,10 +73,38 @@ class QueenRouter:
             raise UnknownWorker(f"{host}/{profile}")
         await handler.spawn(repo, task, roots)
 
-    async def cmd_kill(self, ref: int) -> bool:
+    async def cmd_kill(
+        self,
+        ref: int,
+        *,
+        on_session_ended: Callable[[int], Awaitable[None]] | None = None,
+    ) -> bool:
+        """`on_session_ended` runs only when this call itself ends a session --
+        i.e. the parked branch below, which has no worker `done` event to
+        follow. A live invocation's kill still ends through the worker, and
+        QueenSink.on_done does the teardown there as it always has. Passed per
+        call rather than held as a dependency so the single /kill handler in
+        build_dispatcher (shared by BOTH runtime shapes) stays the only wiring
+        site -- one more constructor argument would mean two build sites to keep
+        in sync, which is exactly how park_default_backoff came to be dropped on
+        the single-process path."""
         entry = self._bk.get(ref)
         if entry is None:
             return False
+        if entry.status == "parked":
+            # A parked session has NO process: `local_id` names the invocation
+            # that already died on the usage limit. Sending a kill frame is at
+            # best a no-op and at worst a lie -- RemoteWorker.kill returns True
+            # unconditionally, so the split queen answered "Killed" while the
+            # row stayed parked, stayed in _ACTIVE, stayed in parked_due, and
+            # the sweep auto-resumed it at the next reset. End the session here
+            # instead: 'killed' is outside both _ACTIVE and parked_due, so the
+            # sweep stops seeing it and the answer becomes true. This is also
+            # the only way to cancel a parked session at all.
+            self._bk.set_status(ref, "killed")
+            if on_session_ended is not None:
+                await on_session_ended(ref)
+            return True
         handler = self._workers.get((entry.host, entry.profile))
         if handler is None:
             return False

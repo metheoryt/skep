@@ -100,6 +100,17 @@ terminal arrived" as "the session is finished" must special-case it; `QueenSink`
 does (it skips the mailbox `handle_recipient_gone` teardown on a park), and
 `Bookkeeping._ACTIVE` counts `parked` as active so `/ls` still lists it.
 
+`/kill <ref>` is the one way to *end* a parked session. `cmd_kill` special-cases
+`parked` and never round-trips to the worker — a parked entry's `local_id` names
+the invocation that already died, and `RemoteWorker.kill` returns `True`
+regardless, so the split queen used to answer "Killed" while the row stayed
+`parked`, stayed in `_ACTIVE`, stayed in `parked_due`, and the sweep resumed it
+at the next reset. It writes `killed` to the journal directly (outside both
+`_ACTIVE` and `parked_due`, so the sweep stops seeing it) and runs the mailbox
+teardown the missing `done` event would otherwise have carried — passed down
+from the `/kill` handler in `build_dispatcher` as `on_session_ended`, so the one
+handler both runtime shapes share is the only wiring site.
+
 **The park → sweep → resume loop (Sessions A3):**
 
 11. `stream.detect_usage_limit(ev)` inspects each `result` event and returns a
@@ -519,7 +530,9 @@ worth knowing before you touch the code.
   `"no such session"` after a worker's DB was wiped) retries every tick, forever,
   and the owner is never told. Nothing counts attempts and nothing gives up. Note
   the exception type is not a usable discriminator either: `"already has a live
-  invocation"` is a benign, expected `ValueError` on the same path.
+  invocation"` is a benign, expected `ValueError` on the same path. The manual
+  stop is `/kill <ref>`, which ends a parked session outright (§3); there is
+  still no automatic give-up.
 - **`cmd_resume` routes on worker *registration*; the sweep additionally gates on
   `is_online`.** Deliberate — a bulk background loop should skip disconnected
   workers, while an explicit human `/resume` should not be silently swallowed — but

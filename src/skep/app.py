@@ -199,7 +199,17 @@ def build_dispatcher(
         if not command.args or not command.args.strip().isdigit():
             await message.answer("Usage: /kill <ref>", parse_mode=None)
             return
-        ok = await router.cmd_kill(int(command.args.strip()))
+        # Killing a *parked* session ends it with no worker `done` event to
+        # follow, so the mailbox teardown that on_done normally does has to be
+        # handed down here. This handler is shared by both runtime shapes.
+        ok = await router.cmd_kill(
+            int(command.args.strip()),
+            on_session_ended=(
+                mailbox_service.handle_recipient_gone
+                if mailbox_service is not None
+                else None
+            ),
+        )
         await message.answer("Killed" if ok else "No such task", parse_mode=None)
 
     @dp.message(Command("resume"), F.func(owner_only))

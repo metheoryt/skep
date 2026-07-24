@@ -53,6 +53,81 @@ async def test_kill_unknown_ref_returns_false():
     assert await router.cmd_kill(999) is False
 
 
+async def test_kill_of_a_parked_session_never_reaches_the_worker():
+    """A parked entry's local_id names the DEAD invocation -- there is no
+    process to kill. Round-tripping is worse than useless: RemoteWorker.kill
+    returns True unconditionally, so the split queen answered "Killed" while the
+    worker did nothing and the row stayed parked."""
+    bk = Bookkeeping.open(":memory:")
+    router = QueenRouter(bk)
+    h = _handler()
+    router.register("g16", "work", h)
+    ref = bk.add("g16", "work", 5, "nix", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+
+    assert await router.cmd_kill(ref) is True
+
+    h.kill.assert_not_awaited()
+    assert bk.get(ref).status == "killed"
+
+
+async def test_killing_a_parked_session_stops_the_sweep_resurrecting_it():
+    """The escape hatch only works if 'killed' actually leaves both the active
+    set and the sweep's due query -- otherwise /kill would answer "Killed" and
+    the auto-resume sweep would restart the session at the next reset."""
+    bk = Bookkeeping.open(":memory:")
+    router = QueenRouter(bk)
+    router.register("g16", "work", _handler())
+    ref = bk.add("g16", "work", 5, "nix", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+    assert bk.parked_due(200.0) and bk.list_active()   # due, and listed by /ls
+
+    await router.cmd_kill(ref)
+
+    assert bk.parked_due(200.0) == []   # the sweep can no longer see it
+    assert bk.list_active() == []       # and /ls stops calling it active
+
+
+async def test_kill_of_a_parked_session_reaps_its_mailbox():
+    """The park path deliberately keeps the mailbox alive (on_done's parked
+    branch skips handle_recipient_gone) because the session is expected to come
+    back. A kill from parked ends the session with no `done` event to follow --
+    QueenSink.on_done is the only caller of handle_recipient_gone, so without
+    this the pending inbox rows are never dead-lettered and the CEO is never
+    told."""
+    bk = Bookkeeping.open(":memory:")
+    router = QueenRouter(bk)
+    router.register("g16", "work", _handler())
+    ref = bk.add("g16", "work", 5, "nix", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+    ended: list[int] = []
+
+    async def _ended(r: int) -> None:
+        ended.append(r)
+
+    assert await router.cmd_kill(ref, on_session_ended=_ended) is True
+    assert ended == [ref]
+
+
+async def test_kill_of_a_running_session_does_not_run_on_session_ended():
+    """A live invocation's kill still terminates through the worker, whose
+    `done` event carries the teardown as it always has -- running it here too
+    would dead-letter the inbox twice."""
+    bk = Bookkeeping.open(":memory:")
+    router = QueenRouter(bk)
+    h = _handler()
+    router.register("g16", "work", h)
+    ref = bk.add("g16", "work", 5, "nix", "t", topic_id=1)
+    ended: list[int] = []
+
+    async def _ended(r: int) -> None:
+        ended.append(r)
+
+    assert await router.cmd_kill(ref, on_session_ended=_ended) is True
+    h.kill.assert_awaited_once_with(5)
+    assert ended == []
+
+
 async def test_cmd_resume_routes_to_worker():
     bk = Bookkeeping.open(":memory:")
     ref = bk.add("h", "p", 1, "r", "t", topic_id=1)

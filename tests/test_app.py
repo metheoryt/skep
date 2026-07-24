@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot
@@ -249,6 +249,7 @@ class _FakeRouter:
     def __init__(self):
         self.cmd_spawn = AsyncMock()
         self.cmd_resume = AsyncMock(return_value=True)
+        self.cmd_kill = AsyncMock(return_value=True)
 
 
 @pytest.fixture
@@ -300,6 +301,26 @@ async def test_spawn_command_without_watch_sends_no_roots(dispatcher, router):
     router.cmd_spawn.assert_awaited_once_with(
         "g16", "default", "nix", "fix it", roots=None
     )
+
+
+# -- /kill dispatcher wiring ---------------------------------------------
+
+
+async def test_kill_hands_the_mailbox_teardown_to_the_router(router):
+    """The one /kill handler is shared by BOTH runtime shapes, so wiring the
+    session-end teardown here covers split-queen and single-process at once."""
+    svc = MagicMock()
+    dispatcher = build_dispatcher(router, _qcfg(), mailbox_service=svc)
+    answer = await _send(dispatcher, "/kill 7")
+    router.cmd_kill.assert_awaited_once_with(
+        7, on_session_ended=svc.handle_recipient_gone
+    )
+    answer.assert_awaited_once_with("Killed", parse_mode=None)
+
+
+async def test_kill_without_a_mailbox_service_passes_no_teardown(dispatcher, router):
+    await _send(dispatcher, "/kill 7")
+    router.cmd_kill.assert_awaited_once_with(7, on_session_ended=None)
 
 
 # -- /resume dispatcher wiring -------------------------------------------
