@@ -122,6 +122,52 @@ def test_migration_backfills_existing_rows(tmp_path):
     bk2.close()
 
 
+def test_v1_journal_upgrades_to_v2_in_place(tmp_path):
+    """v1 -> v2 is the realistic upgrade: an already-deployed A2 queen has a v1
+    journal (session_local_id, no parked_until) and A3 must open it in place.
+    Only v0 -> v2 was covered."""
+    path = str(tmp_path / "bk.sqlite")
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE entries (
+            ref INTEGER PRIMARY KEY AUTOINCREMENT,
+            host TEXT NOT NULL,
+            profile TEXT NOT NULL,
+            local_id INTEGER NOT NULL,
+            repo TEXT NOT NULL,
+            title TEXT NOT NULL,
+            topic_id INTEGER NOT NULL,
+            activity_msg_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'running',
+            session_local_id INTEGER
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO entries (host, profile, local_id, session_local_id, repo,"
+        " title, topic_id) VALUES ('g16', 'work', 9, 4, 'nix', 'a2 task', 42)"
+    )
+    # A v1 file says so. Without this it reads as v0 and the v0->v1 migration
+    # re-adds a column that is already there.
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    bk = Bookkeeping.open(path)
+    e = bk.by_worker_task("g16", "work", 9)
+    assert e.session_local_id == 4       # v1's session id survives untouched
+    assert e.parked_until is None        # the new column defaults to NULL
+    # ...and the v2 feature works on the upgraded file.
+    bk.park(e.ref, until=1000.0)
+    assert [x.ref for x in bk.parked_due(2000.0)] == [e.ref]
+    bk.close()
+
+    bk2 = Bookkeeping.open(path)         # re-open must be a no-op, not an error
+    assert bk2.get(e.ref).parked_until == 1000.0
+    bk2.close()
+
+
 def test_park_sets_status_and_until():
     bk = Bookkeeping.open(":memory:")
     ref = bk.add("h", "p", 1, "repo", "task", topic_id=10)
