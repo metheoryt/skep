@@ -124,7 +124,7 @@ class QueenSink:
         if origin == "sweep":
             # The auto-resume sweep re-dispatches every due entry each tick and
             # nothing on the rejection path clears `parked`, so a worker that
-            # stays full would rejects one resume every park_sweep_interval --
+            # stays full rejects one resume every park_sweep_interval --
             # thousands of identical owner notifications a day, into Telegram's
             # rate limiter. Machine-driven and routine: log it, never post it.
             log.info(
