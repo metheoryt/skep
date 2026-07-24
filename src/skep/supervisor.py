@@ -72,6 +72,11 @@ class Supervisor:
         self._memory = memory
         self._mcp_config_writer = mcp_config_writer
         self._agents: dict[int, AgentProcess] = {}
+        # Sessions with an invocation in flight, keyed by session_local_id.
+        # `_agents` is keyed by INVOCATION id and is only populated after the
+        # agent has started, so it cannot answer "is this session already
+        # being resumed?" during the spawn -- this set can (see resume()).
+        self._live_sessions: set[int] = set()
         self._shims: dict[int, MailboxShim] = {}
         self._tasks: set[asyncio.Task] = set()
 
@@ -262,6 +267,19 @@ class Supervisor:
             raise ValueError(
                 f"session {session_local_id} has no resume_token to resume from"
             )
+        # Check-and-claim. Two callers can now race on one session (the human's
+        # /resume and the queen's park sweep), and every upstream filter is
+        # stale by the time it lands here: the journal's status only becomes
+        # 'running' once task_started round-trips back to the queen. Nothing
+        # between this check and the add may await -- that is what makes the
+        # pair atomic under single-threaded asyncio, and a second resume that
+        # slipped through would give one worktree two `claude --resume`
+        # processes sharing one resume_token. Reject, never queue.
+        if session_local_id in self._live_sessions:
+            raise ValueError(
+                f"session {session_local_id} already has a live invocation"
+            )
+        self._live_sessions.add(session_local_id)
 
         worktree_path = Path(prev.worktree_path)
         tid = self._reg.add_task(prev.repo, prev.task, prev.worktree_path, mode="native")
@@ -293,6 +311,9 @@ class Supervisor:
             t.add_done_callback(self._tasks.discard)
         except Exception as exc:
             self._agents.pop(tid, None)
+            # Release the claim: a resume that never got off the ground must
+            # not wedge its session out of every future resume.
+            self._live_sessions.discard(session_local_id)
             self._reg.update(tid, status="failed")
             self._reg.log_audit(tid, "error", f"resume failed: {exc}")
             if agent is not None:
@@ -357,6 +378,15 @@ class Supervisor:
                 park_reset = None
             self._reg.update(task_id, status=terminal)
             self._agents.pop(task_id, None)
+            # Sole teardown path for a started invocation -- kill() only flips
+            # the status and signals the agent, the stream ending lands here --
+            # so this is where the session goes free again. A session parks and
+            # resumes many times over its life; forgetting this would make
+            # every session one-shot. Spawned (never-resumed) sessions simply
+            # aren't in the set, and discard tolerates that.
+            session_local_id = self._task(task_id).session_local_id
+            if session_local_id is not None:
+                self._live_sessions.discard(session_local_id)
             shim = self._shims.pop(task_id, None)
             if shim is not None:
                 try:

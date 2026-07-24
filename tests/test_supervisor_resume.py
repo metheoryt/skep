@@ -1,7 +1,10 @@
+import asyncio
+
 import pytest
 from conftest import FakeAgent
 
 from skep.db import Registry
+from skep.stream import Event
 from skep.supervisor import BASE_TOOLS, Supervisor
 
 
@@ -60,3 +63,129 @@ async def test_resume_without_resume_token_raises(worker_config_no_memory, fake_
     )
     with pytest.raises(ValueError):
         await sup.resume(first)
+
+
+async def _drain(sup: Supervisor) -> None:
+    """Await every run_events task the supervisor has in flight."""
+    await asyncio.gather(*list(sup._tasks))
+
+
+def _parked_session(reg: Registry, token: str = "tok-1") -> int:
+    sid = reg.add_task("nix", "t", "/wt/nix-1")
+    reg.update(sid, session_local_id=sid, resume_token=token, status="parked")
+    return sid
+
+
+class _LiveAgent(FakeAgent):
+    """An agent that streams its session id and then keeps running.
+
+    `streaming` is set once run_events has consumed the system event (so the
+    invocation row carries a resume_token); `hold` releases the stream.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.streaming = asyncio.Event()
+        self.hold = asyncio.Event()
+
+    async def events(self):
+        yield Event(kind="system", session_id="tok-live")
+        self.streaming.set()
+        await self.hold.wait()
+
+
+@pytest.mark.asyncio
+async def test_second_resume_of_a_live_session_is_rejected(
+    worker_config_no_memory, fake_sink
+):
+    """Two callers (the human and the park sweep) resume one session.
+
+    Once the live invocation has streamed its session id, nothing upstream
+    stops a second resume: bookkeeping still says 'parked' until task_started
+    round-trips, and latest_invocation now hands back a row WITH a
+    resume_token. Without a claim, the second call spawns a second
+    `claude --resume` on the same token and the same worktree.
+    """
+    agents = []
+
+    def factory(**kwargs):
+        agent = _LiveAgent()
+        agents.append(agent)
+        return agent
+
+    reg = Registry.open(":memory:")
+    sid = _parked_session(reg)
+    sup = Supervisor(
+        worker_config_no_memory, reg, fake_sink,
+        agent_factory=factory, worktree_factory=lambda *a: None,
+    )
+
+    live = await sup.resume(sid)
+    await agents[0].streaming.wait()
+    assert reg.get_task(live).resume_token == "tok-live"
+
+    with pytest.raises(ValueError, match="live invocation"):
+        await sup.resume(sid)
+
+    assert len(agents) == 1  # exactly one agent, not two
+
+    agents[0].hold.set()
+    await _drain(sup)
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_releases_the_claim(worker_config_no_memory, fake_sink):
+    """A resume that blows up must not wedge its session forever."""
+    agents = []
+
+    class BoomAgent(FakeAgent):
+        async def start(self):
+            raise RuntimeError("agent start failed")
+
+    def factory(**kwargs):
+        agents.append(kwargs)
+        return BoomAgent() if len(agents) == 1 else FakeAgent()
+
+    reg = Registry.open(":memory:")
+    sid = _parked_session(reg)
+    sup = Supervisor(
+        worker_config_no_memory, reg, fake_sink,
+        agent_factory=factory, worktree_factory=lambda *a: None,
+    )
+
+    with pytest.raises(RuntimeError):
+        await sup.resume(sid)
+
+    # The dead invocation is now the session's latest, so give it the session
+    # id it would have streamed before dying -- otherwise the retry is turned
+    # away for a missing resume_token and never reaches the claim at all.
+    dead = reg.latest_invocation(sid)
+    reg.update(dead.id, resume_token="tok-1")
+
+    retry = await sup.resume(sid)  # claim released -> a retry gets through
+    await _drain(sup)
+    assert reg.get_task(retry).session_local_id == sid
+
+
+@pytest.mark.asyncio
+async def test_completed_invocation_releases_the_claim(
+    worker_config_no_memory, fake_sink
+):
+    """park -> resume -> park -> resume: a session resumes many times."""
+    reg = Registry.open(":memory:")
+    sid = _parked_session(reg)
+    sup = Supervisor(
+        worker_config_no_memory, reg, fake_sink,
+        agent_factory=lambda **k: FakeAgent(
+            [Event(kind="system", session_id="tok-2")]
+        ),
+        worktree_factory=lambda *a: None,
+    )
+
+    first = await sup.resume(sid)
+    await _drain(sup)  # the invocation finishes -> run_events releases it
+
+    second = await sup.resume(sid)
+    await _drain(sup)
+    assert second != first
+    assert reg.get_task(second).session_local_id == sid
