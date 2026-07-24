@@ -283,8 +283,19 @@ class Supervisor:
 
         worktree_path = Path(prev.worktree_path)
         tid = self._reg.add_task(prev.repo, prev.task, prev.worktree_path, mode="native")
-        # A resume is a NEW invocation of the SAME session.
-        self._reg.update(tid, session_local_id=session_local_id, model=model)
+        # A resume is a NEW invocation of the SAME session. It inherits the
+        # token it is resuming FROM: this row is latest_invocation for the
+        # session from here on, so leaving it NULL when the agent dies before
+        # streaming its `system` event would make every later resume fail the
+        # no-resume_token check -- permanently, across worker restarts. The
+        # agent's own session id overwrites this the moment it arrives
+        # (run_events), so on the happy path the seed is never observed.
+        self._reg.update(
+            tid,
+            session_local_id=session_local_id,
+            model=model,
+            resume_token=prev.resume_token,
+        )
 
         agent: AgentProcess | None = None
         try:

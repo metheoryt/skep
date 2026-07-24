@@ -156,15 +156,64 @@ async def test_failed_resume_releases_the_claim(worker_config_no_memory, fake_si
     with pytest.raises(RuntimeError):
         await sup.resume(sid)
 
-    # The dead invocation is now the session's latest, so give it the session
-    # id it would have streamed before dying -- otherwise the retry is turned
-    # away for a missing resume_token and never reaches the claim at all.
-    dead = reg.latest_invocation(sid)
-    reg.update(dead.id, resume_token="tok-1")
-
     retry = await sup.resume(sid)  # claim released -> a retry gets through
     await _drain(sup)
     assert reg.get_task(retry).session_local_id == sid
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_leaves_the_session_resumable(
+    worker_config_no_memory, fake_sink
+):
+    """A resume that dies before its agent streams a session id must not brick
+    the session.
+
+    The failed invocation stays the session's `latest_invocation` forever, so a
+    row left with resume_token NULL turns every LATER resume into "no
+    resume_token to resume from" -- permanently, across worker restarts. The
+    sweep retries on its own now, so that is a self-inflicted brick.
+    """
+
+    class BoomAgent(FakeAgent):
+        async def start(self):
+            raise RuntimeError("agent start failed")
+
+    reg = Registry.open(":memory:")
+    sid = _parked_session(reg, token="tok-1")
+    sup = Supervisor(
+        worker_config_no_memory, reg, fake_sink,
+        agent_factory=lambda **k: BoomAgent(), worktree_factory=lambda *a: None,
+    )
+
+    with pytest.raises(RuntimeError):
+        await sup.resume(sid)
+
+    # The dead row is now the session's latest -- it must carry the token it
+    # was resuming from, or nothing can ever resume this session again.
+    assert reg.latest_invocation(sid).resume_token == "tok-1"
+
+
+@pytest.mark.asyncio
+async def test_successful_resume_records_the_newly_streamed_token(
+    worker_config_no_memory, fake_sink
+):
+    """The seeded token is a floor, never a ceiling: the agent's own `system`
+    event must still overwrite it. Without this, seeding could silently mask a
+    lost resume_token and every later resume would reuse a stale session."""
+    reg = Registry.open(":memory:")
+    sid = _parked_session(reg, token="tok-old")
+    sup = Supervisor(
+        worker_config_no_memory, reg, fake_sink,
+        agent_factory=lambda **k: FakeAgent(
+            [Event(kind="system", session_id="tok-new")]
+        ),
+        worktree_factory=lambda *a: None,
+    )
+
+    tid = await sup.resume(sid)
+    await _drain(sup)
+
+    assert reg.get_task(tid).resume_token == "tok-new"
 
 
 @pytest.mark.asyncio
