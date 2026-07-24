@@ -16,6 +16,7 @@ from skep.db import Registry
 from skep.queen.assembly import (
     _ceo_retry_loop,
     _mailbox_db_path,
+    _park_sweep_loop,
     build_mailbox_service,
 )
 from skep.queen.bookkeeping import Bookkeeping
@@ -125,6 +126,12 @@ def build_worker_and_router(
     supervisor = Supervisor(wcfg, registry, worker_sink, mailbox_client=mailbox_switch)
     router = QueenRouter(bk)
     router.register(wcfg.host, wcfg.profile, supervisor)
+    # The in-process worker has no connection to lose, so it is online from the
+    # moment it is wired. Only the WS path marks presence on connect, so without
+    # this the sole worker reads as detached forever: `/ls` labels it
+    # "(detached)" and the park sweep, which skips offline workers, would never
+    # auto-resume anything on this path.
+    router.mark_online(wcfg.host, wcfg.profile)
     return router, supervisor
 
 
@@ -268,20 +275,30 @@ async def main() -> None:
         router, qcfg, mailbox_service=mailbox_service, mailbox=mailbox
     )
 
-    # No aiohttp app on this path (aiogram polling), so run the CEO-retry
-    # sweeper as a background task tied to the polling loop's lifetime.
-    retry_task: asyncio.Task[None] | None = None
+    # No aiohttp app on this path (aiogram polling), so the background loops the
+    # queen daemon ties to app.cleanup_ctx run as plain tasks tied to the
+    # polling loop's lifetime instead.
+    background: list[asyncio.Task[None]] = []
     if qcfg.mailbox_ceo_retry_interval > 0:
-        retry_task = asyncio.create_task(
-            _ceo_retry_loop(mailbox_service, qcfg.mailbox_ceo_retry_interval)
+        background.append(
+            asyncio.create_task(
+                _ceo_retry_loop(mailbox_service, qcfg.mailbox_ceo_retry_interval)
+            )
+        )
+    if qcfg.park_sweep_interval > 0:
+        background.append(
+            asyncio.create_task(
+                _park_sweep_loop(bk, router, qcfg.park_sweep_interval)
+            )
         )
     try:
         await dp.start_polling(bot)
     finally:
-        if retry_task is not None:
-            retry_task.cancel()
+        for task in background:
+            task.cancel()
+        for task in background:
             with contextlib.suppress(asyncio.CancelledError):
-                await retry_task
+                await task
 
 
 def run() -> None:

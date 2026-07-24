@@ -65,6 +65,23 @@ def test_build_worker_and_router_activates_mailbox():
     assert isinstance(sup._mailbox_client, SwitchableMailboxClient)  # type: ignore[attr-defined]
 
 
+def test_build_worker_and_router_marks_the_in_process_worker_online():
+    """A3 regression: the in-process worker must be marked online at wiring.
+
+    Only the WS connect path calls mark_online, so on the single-process path
+    the sole worker read as detached forever. The park sweep skips offline
+    workers, so auto-resume was silently inert on the `skep` entrypoint --
+    parked sessions sat until a human ran /resume. ARCHITECTURE.md 2 calls
+    single-process mode live and supported, so it must sweep too.
+    """
+    bk = Bookkeeping.open(":memory:")
+    registry = Registry.open(":memory:")
+    wcfg = _wcfg(Path("/tmp"))
+    router, _sup = build_worker_and_router(wcfg, FakeQueenSink(), bk, registry)
+
+    assert router.is_online(wcfg.host, wcfg.profile)
+
+
 async def test_build_worker_and_router_wires_in_process_mailbox(tmp_path):
     """L0.1 #4: given a MailboxService, the single-process assembly must point
     the Supervisor's SwitchableMailboxClient at an in-process target, so an
