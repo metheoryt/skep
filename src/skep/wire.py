@@ -92,10 +92,22 @@ def done_msg(
     }
 
 
-def spawn_rejected_msg(reason: str, action: str = "spawn") -> dict[str, Any]:
+def spawn_rejected_msg(
+    reason: str, action: str = "spawn", origin: str | None = None
+) -> dict[str, Any]:
     """`action` names the command that was rejected ("spawn" or "resume"),
-    so the queen's rendering can use the right verb (Sessions A3 task 8)."""
-    return {"t": SPAWN_REJECTED, "reason": reason, "action": action}
+    so the queen's rendering can use the right verb (Sessions A3 task 8).
+
+    `origin` echoes back the origin of the command that was rejected (see
+    `resume_msg`), so the queen can tell a machine-driven rejection from one a
+    human is waiting on. Absent on a legacy frame; read tolerantly.
+    """
+    return {
+        "t": SPAWN_REJECTED,
+        "reason": reason,
+        "action": action,
+        "origin": origin,
+    }
 
 
 def spawn_msg(
@@ -117,8 +129,20 @@ def ls_request_msg() -> dict[str, Any]:
     return {"t": LS_REQUEST}
 
 
-def resume_msg(session_local_id: int, model: str | None = None) -> dict[str, Any]:
-    return {"t": RESUME, "session_local_id": session_local_id, "model": model}
+def resume_msg(
+    session_local_id: int, model: str | None = None, origin: str | None = None
+) -> dict[str, Any]:
+    """`origin` names who asked: "sweep" for the queen's auto-resume sweep,
+    absent/None for a human's /resume. The worker echoes it back on a
+    `spawn_rejected` so the queen can keep routine sweep rejections off the
+    owner's Telegram (Sessions A3 task 9 review). Workers built before this
+    field simply ignore the key."""
+    return {
+        "t": RESUME,
+        "session_local_id": session_local_id,
+        "model": model,
+        "origin": origin,
+    }
 
 
 MAILBOX_SEND = "mailbox_send"

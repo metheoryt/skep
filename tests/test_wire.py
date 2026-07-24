@@ -85,8 +85,26 @@ def test_spawn_msg_roots_default_to_none():
 
 def test_resume_msg_shape():
     m = wire.resume_msg(42, model="opus")
-    assert m == {"t": "resume", "session_local_id": 42, "model": "opus"}
+    assert m == {
+        "t": "resume",
+        "session_local_id": 42,
+        "model": "opus",
+        "origin": None,
+    }
 
 
 def test_resume_msg_model_optional():
     assert wire.resume_msg(42)["model"] is None
+
+
+def test_resume_msg_carries_origin():
+    assert wire.resume_msg(42, origin="sweep")["origin"] == "sweep"
+
+
+def test_spawn_rejected_msg_origin_defaults_none():
+    assert wire.spawn_rejected_msg("at capacity")["origin"] is None
+
+
+def test_spawn_rejected_msg_carries_origin():
+    msg = wire.spawn_rejected_msg("at capacity", action="resume", origin="sweep")
+    assert msg["origin"] == "sweep"

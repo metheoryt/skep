@@ -87,7 +87,9 @@ class _NullInbox:
     async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
         pass
 
-    async def on_spawn_rejected(self, host, profile, reason, action="spawn"):
+    async def on_spawn_rejected(
+        self, host, profile, reason, action="spawn", origin=None
+    ):
         pass
 
 

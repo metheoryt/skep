@@ -33,6 +33,31 @@ async def test_spawn_rejected_renders_resume_verb_when_specified():
     )
 
 
+async def test_sweep_origin_rejection_does_not_notify_the_owner():
+    """A worker at capacity rejects every sweep tick's resume -- one owner
+    notification every park_sweep_interval for the whole busy period. Nothing
+    on the rejection path clears `parked`, so the same entry comes due again
+    next tick. Routine, machine-driven, and it must stay off Telegram."""
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+    await sink.on_spawn_rejected(
+        "g16", "work", "at capacity", "resume", "sweep"
+    )
+    gw.post.assert_not_awaited()
+
+
+async def test_manual_resume_rejection_still_notifies_the_owner():
+    """/resume answers optimistically ("Resuming ref N") and the real failure
+    only arrives later as this frame -- suppressing it would leave the human
+    believing a resume that never happened."""
+    gw, bk = _gateway(), Bookkeeping.open(":memory:")
+    sink = QueenSink(gw, bk)
+    await sink.on_spawn_rejected("g16", "work", "at capacity", "resume")
+    gw.post.assert_awaited_once_with(
+        None, "resume on g16/work rejected: at capacity"
+    )
+
+
 async def test_task_started_creates_topic_and_entry():
     gw, bk = _gateway(), Bookkeeping.open(":memory:")
     sink = QueenSink(gw, bk)

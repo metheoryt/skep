@@ -62,7 +62,20 @@ async def test_cmd_resume_routes_to_worker():
     router.register("h", "p", handler)
     ok = await router.cmd_resume(ref)
     assert ok is True
-    handler.resume.assert_awaited_once_with(1, model=None)
+    handler.resume.assert_awaited_once_with(1, model=None, origin=None)
+
+
+async def test_cmd_resume_forwards_origin():
+    """The sweep tags its dispatches so the queen can keep the resulting
+    rejections off the owner's Telegram; a human's /resume passes nothing."""
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "r", "t", topic_id=1)
+    bk.park(ref, until=100.0)
+    router = QueenRouter(bk)
+    handler = _handler()
+    router.register("h", "p", handler)
+    await router.cmd_resume(ref, origin="sweep")
+    handler.resume.assert_awaited_once_with(1, model=None, origin="sweep")
 
 
 async def test_cmd_resume_unknown_ref_is_false():

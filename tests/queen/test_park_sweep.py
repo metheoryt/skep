@@ -7,6 +7,7 @@ the next tick.
 """
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 from aiohttp import web
 
@@ -15,12 +16,17 @@ from skep.queen.app import build_queen
 from skep.queen.assembly import _install_park_sweep, _park_sweep_loop
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.router import QueenRouter
+from skep.queen.telegram_sink import QueenSink
 from skep.supervisor import CapacityError
 
 
 class _Handler:
+    """A SINGLE-PROCESS command handler: the router's handler IS a local
+    Supervisor, so resume() raises CapacityError/ValueError synchronously."""
+
     def __init__(self, fail=None):
         self.resumed = []
+        self.origins = []
         self._fail = fail
 
     async def spawn(self, *a, **k):
@@ -32,10 +38,23 @@ class _Handler:
     async def panic(self):
         return 0
 
-    async def resume(self, sid, model=None):
+    async def resume(self, sid, model=None, origin=None):
         self.resumed.append(sid)
+        self.origins.append(origin)
         if self._fail is not None:
             raise self._fail
+
+
+class _FireAndForgetHandler(_Handler):
+    """A SPLIT-QUEEN command handler: the router's handler is a RemoteWorker,
+    whose resume() sends a WS frame and returns 0. It can never raise -- the
+    worker's rejection comes back out-of-band, later, as a spawn_rejected
+    frame carrying the origin the resume was dispatched with."""
+
+    async def resume(self, sid, model=None, origin=None):
+        self.resumed.append(sid)
+        self.origins.append(origin)
+        return 0
 
 
 async def _one_pass(bk, router, now=200.0):
@@ -98,7 +117,14 @@ async def test_sweep_leaves_a_not_yet_due_session_parked():
 
 async def test_sweep_survives_a_failing_entry_and_keeps_going():
     """A full worker (CapacityError) or any other per-entry blow-up must not
-    take the loop down, nor stop the entries behind it."""
+    take the loop down, nor stop the entries behind it.
+
+    This models the SINGLE-PROCESS shape (`skep`), where the router's handler
+    is a local Supervisor and resume() raises synchronously -- so the sweep's
+    own `except CapacityError` / `except Exception` are what catch it. The
+    split-queen shape, where resume() is fire-and-forget and the rejection
+    returns as a frame, is covered by the test below.
+    """
     bk = Bookkeeping.open(":memory:")
     _parked(bk, host="full", local_id=11)
     _parked(bk, host="boom", local_id=22)
@@ -120,6 +146,42 @@ async def test_sweep_survives_a_failing_entry_and_keeps_going():
     # and both bad entries were attempted; neither killed the pass
     assert handlers["full"].resumed == [11]
     assert handlers["boom"].resumed == [22]
+
+
+async def test_split_queen_sweep_rejection_never_reaches_the_owner():
+    """The split-queen contract, end to end: the sweep tags its dispatch
+    `origin="sweep"`, the worker echoes that tag back on the rejection, and the
+    sink drops it instead of posting.
+
+    Nothing on the rejection path clears `parked` or bumps `parked_until`, so a
+    worker that stays full re-rejects the same entry every tick -- one owner
+    notification every park_sweep_interval, forever. A human's /resume must
+    still be told, because /resume answers optimistically and the real failure
+    only arrives here.
+    """
+    bk = Bookkeeping.open(":memory:")
+    _parked(bk)
+    router = QueenRouter(bk)
+    h = _FireAndForgetHandler()  # returns normally; never raises
+    router.register("h", "p", h)
+    router.mark_online("h", "p")
+
+    await _one_pass(bk, router)
+
+    assert h.resumed == [1]
+    assert h.origins == ["sweep"]  # the sweep tagged its dispatch
+
+    gw = MagicMock()
+    gw.post = AsyncMock(return_value=9)
+    sink = QueenSink(gw, bk)
+
+    # the rejection the worker sends back for THAT dispatch
+    await sink.on_spawn_rejected("h", "p", "at capacity", "resume", h.origins[0])
+    gw.post.assert_not_awaited()
+
+    # the same rejection, for a human's /resume (no origin)
+    await sink.on_spawn_rejected("h", "p", "at capacity", "resume")
+    gw.post.assert_awaited_once()
 
 
 async def test_install_park_sweep_runs_under_apprunner_and_stops_cleanly():

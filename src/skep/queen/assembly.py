@@ -83,9 +83,17 @@ async def _park_sweep_loop(
     `now` is wall-clock on purpose (never monotonic): `parked_until` is a POSIX
     timestamp written to the journal, so a queen restart must still see the same
     deadline. Edges fall out of re-evaluation rather than bespoke handling: an
-    offline worker is skipped and retried next tick; a full worker raises
-    CapacityError and is retried next tick; a queen restart just resumes finding
-    due rows. Never lets one bad entry kill the loop.
+    offline worker is skipped and retried next tick; a full worker is retried
+    next tick; a queen restart just resumes finding due rows. Never lets one bad
+    entry kill the loop.
+
+    How a full worker rejects depends on the runtime shape. Single-process: the
+    router's handler IS a local Supervisor, so CapacityError arrives here as a
+    raise and the `except` below swallows it. Split-queen: the handler is a
+    fire-and-forget RemoteWorker that can never raise, and the rejection returns
+    asynchronously as a `spawn_rejected` frame. That is why every dispatch is
+    tagged `origin="sweep"` -- it rides the frame back so QueenSink can drop a
+    routine machine-driven rejection instead of paging the owner every tick.
     """
     while True:
         try:
@@ -93,7 +101,7 @@ async def _park_sweep_loop(
                 if not router.is_online(entry.host, entry.profile):
                     continue
                 try:
-                    await router.cmd_resume(entry.ref)
+                    await router.cmd_resume(entry.ref, origin="sweep")
                 except CapacityError:
                     continue
                 except Exception:

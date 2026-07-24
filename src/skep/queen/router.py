@@ -83,7 +83,12 @@ class QueenRouter:
         await handler.kill(entry.local_id)
         return True
 
-    async def cmd_resume(self, ref: int, model: str | None = None) -> bool:
+    async def cmd_resume(
+        self, ref: int, model: str | None = None, origin: str | None = None
+    ) -> bool:
+        """`origin` names who asked: "sweep" for the auto-resume sweep, None for
+        a human's /resume. It rides the dispatch so a rejection can be traced
+        back to its caller (see wire.resume_msg)."""
         entry = self._bk.get(ref)
         if entry is None:
             return False
@@ -100,7 +105,7 @@ class QueenRouter:
         handler = self._workers.get((entry.host, entry.profile))
         if handler is None:
             return False
-        await handler.resume(entry.session_local_id, model=model)
+        await handler.resume(entry.session_local_id, model=model, origin=origin)
         return True
 
     async def cmd_panic(self) -> int:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 import time
 from collections.abc import Callable
@@ -9,6 +10,8 @@ from skep.formatting import escape_md
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.mailbox import MailboxService
 from skep.telegram_gw import Gateway
+
+log = logging.getLogger(__name__)
 
 
 class QueenSink:
@@ -111,7 +114,22 @@ class QueenSink:
             await self._mailbox_service.handle_recipient_gone(entry.ref)
 
     async def on_spawn_rejected(
-        self, host: str, profile: str, reason: str, action: str = "spawn"
+        self,
+        host: str,
+        profile: str,
+        reason: str,
+        action: str = "spawn",
+        origin: str | None = None,
     ) -> None:
+        if origin == "sweep":
+            # The auto-resume sweep re-dispatches every due entry each tick and
+            # nothing on the rejection path clears `parked`, so a worker that
+            # stays full would rejects one resume every park_sweep_interval --
+            # thousands of identical owner notifications a day, into Telegram's
+            # rate limiter. Machine-driven and routine: log it, never post it.
+            log.info(
+                "sweep %s on %s/%s rejected: %s", action, host, profile, reason
+            )
+            return
         text = escape_md(f"{action} on {host}/{profile} rejected: {reason}")
         await self._gw.post(None, text)

@@ -50,8 +50,16 @@ class RemoteWorker:
         await self._ws.send_str(wire.encode(wire.panic_msg()))
         return 1
 
-    async def resume(self, session_local_id: int, *, model: str | None = None) -> int:
-        await self._ws.send_str(wire.encode(wire.resume_msg(session_local_id, model)))
+    async def resume(
+        self,
+        session_local_id: int,
+        *,
+        model: str | None = None,
+        origin: str | None = None,
+    ) -> int:
+        await self._ws.send_str(
+            wire.encode(wire.resume_msg(session_local_id, model, origin))
+        )
         return 0
 
 
@@ -184,7 +192,11 @@ class QueenWsServer:
             )
         elif t == wire.SPAWN_REJECTED:
             await self._inbox.on_spawn_rejected(
-                host, profile, str(msg["reason"]), msg.get("action", "spawn")
+                host,
+                profile,
+                str(msg["reason"]),
+                msg.get("action", "spawn"),
+                msg.get("origin"),
             )
         elif t == wire.MAILBOX_SEND:
             await self._dispatch_mailbox_send(host, profile, ws, msg)
@@ -428,8 +440,15 @@ class WorkerWsClient:
                     int(msg["session_local_id"]), model=msg.get("model")
                 )
             except (CapacityError, ValueError) as exc:
+                # Echo the origin the queen dispatched with: a rejection of the
+                # sweep's own resume is routine and must not reach a human.
+                # Supervisor.resume never sees it -- the frame is right here.
                 await ws.send_str(
-                    wire.encode(wire.spawn_rejected_msg(str(exc), action="resume"))
+                    wire.encode(
+                        wire.spawn_rejected_msg(
+                            str(exc), action="resume", origin=msg.get("origin")
+                        )
+                    )
                 )
 
 

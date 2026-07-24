@@ -256,8 +256,17 @@ class Supervisor:
         return tid
 
     async def resume(
-        self, session_local_id: int, *, model: str | None = None
+        self,
+        session_local_id: int,
+        *,
+        model: str | None = None,
+        origin: str | None = None,
     ) -> int:
+        # `origin` is accepted and ignored: it exists so that the CommandHandler
+        # protocol has one shape, and only RemoteWorker (which builds a wire
+        # frame) has anything to do with it. On the single-process path there is
+        # no frame, and the caller learns the outcome from the raise.
+        _ = origin
         if len(self._agents) >= self._cfg.max_concurrent:
             raise CapacityError(f"at capacity ({self._cfg.max_concurrent} running)")
         prev = self._reg.latest_invocation(session_local_id)

@@ -36,7 +36,11 @@ class CommandHandler(Protocol):
     async def kill(self, task_id: int) -> bool: ...
     async def panic(self) -> int: ...
     async def resume(
-        self, session_local_id: int, *, model: str | None = None
+        self,
+        session_local_id: int,
+        *,
+        model: str | None = None,
+        origin: str | None = None,
     ) -> int: ...
 
 
@@ -69,7 +73,12 @@ class QueenInbox(Protocol):
         reset_at: float | None = None,
     ) -> None: ...
     async def on_spawn_rejected(
-        self, host: str, profile: str, reason: str, action: str = "spawn"
+        self,
+        host: str,
+        profile: str,
+        reason: str,
+        action: str = "spawn",
+        origin: str | None = None,
     ) -> None: ...
 
 

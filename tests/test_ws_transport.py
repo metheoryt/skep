@@ -12,7 +12,12 @@ from skep.config import WorkerConfig
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.router import QueenRouter
 from skep.transport import SwitchableEventSink
-from skep.ws_transport import QueenWsServer, WorkerWsClient, WsEventSink
+from skep.ws_transport import (
+    QueenWsServer,
+    RemoteWorker,
+    WorkerWsClient,
+    WsEventSink,
+)
 
 
 class RecordingInbox:
@@ -35,8 +40,10 @@ class RecordingInbox:
     async def on_done(self, host, profile, local_id, status, summary, reset_at=None):
         self.events.append(("done", host, profile, local_id, status, summary))
 
-    async def on_spawn_rejected(self, host, profile, reason, action="spawn"):
-        self.events.append(("spawn_rejected", host, profile, reason, action))
+    async def on_spawn_rejected(
+        self, host, profile, reason, action="spawn", origin=None
+    ):
+        self.events.append(("spawn_rejected", host, profile, reason, action, origin))
 
 
 async def _serve(router, inbox, secret="s"):
@@ -237,7 +244,7 @@ class FakeSupervisor:
         self.panics += 1
         return 0
 
-    async def resume(self, session_local_id, *, model=None):
+    async def resume(self, session_local_id, *, model=None, origin=None):
         if not self._resume_ok:
             raise ValueError(f"no such session: {session_local_id}")
         self.resumed.append((session_local_id, model))
@@ -418,6 +425,39 @@ async def test_worker_client_reports_resume_rejection_with_resume_verb():
     assert rejections[0][4] == "resume"
 
 
+async def test_worker_client_echoes_the_resume_origin_in_the_rejection():
+    """A rejection must carry back the origin its resume was dispatched with,
+    through the real RESUME send site -- that is what lets the queen keep a
+    sweep-driven rejection off the owner's Telegram."""
+    inbox = RecordingInbox()
+    router = QueenRouter(Bookkeeping.open(":memory:"))
+    server, url = await _serve(router, inbox)
+    sup = FakeSupervisor(resume_ok=False)
+    switch = SwitchableEventSink()
+    client = WorkerWsClient(_wcfg(url), sup, switch, secret="s")
+    try:
+        async with aiohttp.ClientSession() as sess:
+            task = asyncio.create_task(client.run_once(sess, url))
+            handler = None
+            for _ in range(100):
+                handler = router._workers.get(("g16", "work"))
+                if handler is not None:
+                    break
+                await asyncio.sleep(0.01)
+            assert handler is not None
+            await handler.resume(7, origin="sweep")
+            for _ in range(100):
+                if any(e[0] == "spawn_rejected" for e in inbox.events):
+                    break
+                await asyncio.sleep(0.01)
+            task.cancel()
+    finally:
+        await server.close()
+    rejections = [e for e in inbox.events if e[0] == "spawn_rejected"]
+    assert rejections
+    assert rejections[0][5] == "sweep"
+
+
 async def test_worker_sends_heartbeat():
     inbox = RecordingInbox()
     router = QueenRouter(Bookkeeping.open(":memory:"))
@@ -580,7 +620,7 @@ async def test_dispatch_spawn_rejected_defaults_action_for_legacy_frame():
         "g16", "work", None, {"t": wire.SPAWN_REJECTED, "reason": "at capacity"}
     )
     inbox.on_spawn_rejected.assert_awaited_once_with(
-        "g16", "work", "at capacity", "spawn"
+        "g16", "work", "at capacity", "spawn", None
     )
 
 
@@ -593,5 +633,37 @@ async def test_dispatch_spawn_rejected_forwards_action():
         {"t": wire.SPAWN_REJECTED, "reason": "no such session: 7", "action": "resume"},
     )
     inbox.on_spawn_rejected.assert_awaited_once_with(
-        "g16", "work", "no such session: 7", "resume"
+        "g16", "work", "no such session: 7", "resume", None
     )
+
+
+async def test_dispatch_spawn_rejected_forwards_origin():
+    """The origin rides back with the rejection so the queen can tell a
+    sweep-driven rejection (routine, silent) from a human's /resume."""
+    inbox = AsyncMock()
+    await _server(inbox)._dispatch(
+        "g16",
+        "work",
+        None,
+        {
+            "t": wire.SPAWN_REJECTED,
+            "reason": "at capacity",
+            "action": "resume",
+            "origin": "sweep",
+        },
+    )
+    inbox.on_spawn_rejected.assert_awaited_once_with(
+        "g16", "work", "at capacity", "resume", "sweep"
+    )
+
+
+async def test_remote_worker_resume_frame_carries_origin():
+    sent = []
+
+    class _Ws:
+        async def send_str(self, data):
+            sent.append(wire.decode(data))
+
+    await RemoteWorker(_Ws()).resume(7, model="opus", origin="sweep")
+
+    assert sent == [wire.resume_msg(7, "opus", "sweep")]
