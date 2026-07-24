@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 
 import pytest
 from aiohttp import web
@@ -10,9 +11,11 @@ from conftest import FakeAgent
 from skep.app import build_worker_and_router, parse_spawn, watch_roots
 from skep.config import QueenConfig, WorkerConfig
 from skep.db import Registry
+from skep.queen.assembly import _park_sweep_loop
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.router import QueenRouter
 from skep.queen.telegram_sink import QueenSink
+from skep.stream import Event
 from skep.ws_transport import QueenWsServer, WorkerWsClient
 from skep.transport import SwitchableEventSink
 from skep.supervisor import Supervisor
@@ -70,11 +73,11 @@ async def test_end_to_end_spawn_with_fake_claude(tmp_path, git_repo, fake_claude
     assert gw.post.await_count >= 1
 
 
-async def _start_queen(secret="s"):
+async def _start_queen(secret="s", sink_kwargs=None):
     gw = _gateway()
     bk = Bookkeeping.open(":memory:")
     router = QueenRouter(bk)
-    sink = QueenSink(gw, bk)
+    sink = QueenSink(gw, bk, **(sink_kwargs or {}))
     app = web.Application()
     QueenWsServer(router, sink, secret).attach(app)
     server = TestServer(app)
@@ -265,6 +268,150 @@ async def test_watch_roots_canonical_shape_reaches_the_agent_argv(
     # not a gap: the differently-named sibling test above exists precisely
     # because this same-name case can never exercise the declaration itself.
     assert "READ-ONLY" not in (argv.get("append_system_prompt") or "")
+
+
+class _BlockingAgent(FakeAgent):
+    """An agent whose stream stays open until the test releases it.
+
+    The resumed invocation must still be LIVE when the journal is inspected:
+    `rebind_invocation` sets `status='running'`, and `run_events`' finally would
+    immediately overwrite it with the terminal status if the event stream ended
+    on its own. Releasing the gate lets the invocation finish cleanly so no task
+    is left dangling at teardown.
+    """
+
+    def __init__(self, session_id="sess-1"):
+        super().__init__([])
+        self._session_id = session_id
+        self.release = asyncio.Event()
+
+    async def events(self):
+        await self.release.wait()
+        yield Event(
+            kind="result", text="finished", is_error=False,
+            session_id=self._session_id,
+        )
+
+
+async def _one_sweep_pass(bk, router, now):
+    """Run exactly one pass of the queen's park sweep, then cancel it.
+
+    `interval` is huge on purpose: after its single pass the loop parks in
+    `asyncio.sleep`, so the cancel below can never race a second pass. The real
+    sleep (rather than a bare `sleep(0)`) is what lets the resume frame cross
+    the websocket -- on this path `cmd_resume` is fire-and-forget.
+    """
+    task = asyncio.create_task(
+        _park_sweep_loop(bk, router, interval=3600.0, now=lambda: now)
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+async def test_usage_limit_parks_then_sweep_resumes(tmp_path, git_repo):
+    """Sessions A3 end to end, over the real queen<->worker websocket.
+
+    Drives one session through the whole park/auto-resume loop:
+
+    1. `/spawn` -> the agent's terminal `result` is a usage limit;
+    2. `run_events` calls it `parked` and carries `reset_at` over the wire, so
+       the queen journal parks the row at that instant;
+    3. one pass of the queen's park sweep, with `now` past `parked_until`, sends
+       a `resume` frame to the (online) worker;
+    4. `Supervisor.resume` starts a NEW invocation on the SAME worktree from the
+       stored resume_token, and its `task_started` round-trips back into
+       `rebind_invocation` -- same ref, same topic, `status='running'`.
+
+    The agent factory is stubbed rather than using `fake_claude` because the
+    outcome of each invocation has to be chosen (a usage limit, then a live
+    agent that does not finish until the assertions have run); everything
+    between the two stubs is production code.
+    """
+    repo_name = git_repo.name
+    reset_at = 1000.0  # POSIX ts, deliberately in the past
+    server, url, router, bk, gw = await _start_queen(
+        # No jitter: parked_until must be exactly the reset the worker reported.
+        sink_kwargs={"jitter": lambda: 0.0},
+    )
+    wcfg = WorkerConfig(
+        host="g16", profile="work", claude_config_dir=None,
+        repos_root=git_repo.parent, worktrees_root=tmp_path / "wt",
+        db_path=":memory:", queen_url=url, shared_secret="s",
+    )
+    sup, client = _worker(wcfg, url)
+
+    limited = FakeAgent([
+        Event(kind="system", session_id="sess-1"),
+        Event(
+            kind="result", text="Claude usage limit reached", is_error=True,
+            session_id="sess-1", raw={"subtype": "usage_limit", "reset_at": reset_at},
+        ),
+    ])
+    resumed = _BlockingAgent()
+    calls = []
+
+    def agent_factory(**kwargs):
+        calls.append(kwargs)
+        return limited if len(calls) == 1 else resumed
+
+    sup._agent_factory = agent_factory  # type: ignore[attr-defined]
+
+    try:
+        async with aiohttp.ClientSession() as sess:
+            conn = asyncio.create_task(client.run_once(sess, url))
+
+            for _ in range(200):
+                try:
+                    await router.cmd_spawn("g16", "work", repo_name, "clean nvidia")
+                    break
+                except Exception:
+                    await asyncio.sleep(0.02)
+
+            # 1 + 2: the usage limit parks the session at the reported reset.
+            for _ in range(200):
+                entry = bk.by_worker_task("g16", "work", 1)
+                if entry is not None and entry.status == "parked":
+                    break
+                await asyncio.sleep(0.02)
+            parked = bk.by_worker_task("g16", "work", 1)
+            assert parked.status == "parked"
+            assert parked.parked_until == reset_at
+            ref, topic_id = parked.ref, parked.topic_id
+
+            # 3: one sweep pass, now past the deadline, worker online.
+            assert router.is_online("g16", "work")
+            await _one_sweep_pass(bk, router, now=reset_at + 1000.0)
+
+            # 4: the resume landed and the row is running again on the same ref.
+            for _ in range(200):
+                entry = bk.get(ref)
+                if entry.status == "running":
+                    break
+                await asyncio.sleep(0.02)
+            entry = bk.get(ref)
+            assert entry.status == "running"
+            assert entry.parked_until is None
+            assert entry.topic_id == topic_id     # the topic followed the session
+            assert entry.local_id != parked.local_id  # ... onto a new invocation
+            assert gw.create_topic.await_count == 1   # and no second topic opened
+
+            # What the worker actually received: a resume of the same worktree
+            # off the token the parked invocation left behind.
+            assert len(calls) == 2
+            assert calls[1]["resume_token"] == "sess-1"
+            assert calls[1]["cwd"] == calls[0]["cwd"]
+
+            resumed.release.set()  # let the resumed invocation finish cleanly
+            for _ in range(200):
+                if bk.get(ref).status == "done":
+                    break
+                await asyncio.sleep(0.02)
+            assert bk.get(ref).status == "done"
+            conn.cancel()
+    finally:
+        await server.close()
 
 
 async def test_wrong_secret_worker_never_registers():

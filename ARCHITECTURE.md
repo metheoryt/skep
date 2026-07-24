@@ -1,11 +1,11 @@
 # skep — architecture and concepts
 
-**Describes `metheoryt/ubuntu26-skep-develop` at `3dfda20` (2026-07-23, branched
-from `main`@`eee92e6`), read on 2026-07-23.**
-Since the previous stamp (`main`@`fc4d341`, 2026-07-16) **Sessions A2** landed its
-first slice on this not-yet-merged branch: the queen-side session registry and the
-`/spawn --watch` two-root workspace (§7 has the detail; the rest of A2 is still
-open). This file is written by hand and does not regenerate. When it disagrees
+**Describes `metheoryt/ubuntu26-skep-A2-resume` at `73400a4` (2026-07-24, branched
+from `main`@`e6213a2`), read on 2026-07-24.**
+Since the previous stamp (`3dfda20`, 2026-07-23, now merged as `main`@`e6213a2`)
+**Sessions A3** landed on this not-yet-merged branch: usage-limit detection, the
+`parked` state, `/resume`, and the queen's auto-resume sweep (§3 has the loop, §7
+the status). This file is written by hand and does not regenerate. When it disagrees
 with the code, the code is right — fix this file. Overwrite it in place; never add
 a dated copy.
 
@@ -92,6 +92,72 @@ Inbound and outbound are different routes. They are not the reverse of each othe
 10. `queen.telegram_sink.QueenSink` turns events into Telegram operations via
     `Gateway` (create topic, post, edit), recording message IDs in `Bookkeeping`.
 
+**Terminal states.** `run_events` ends every invocation in exactly one of
+`done` / `failed` / `killed` / **`parked`**. The first three are final. `parked`
+is not: the session is *live but idle* — its worktree, its `ref` and its Telegram
+topic all persist, only the `claude` process is gone. Anything that treats "a
+terminal arrived" as "the session is finished" must special-case it; `QueenSink`
+does (it skips the mailbox `handle_recipient_gone` teardown on a park), and
+`Bookkeeping._ACTIVE` counts `parked` as active so `/ls` still lists it.
+
+**The park → sweep → resume loop (Sessions A3):**
+
+11. `stream.detect_usage_limit(ev)` inspects each `result` event and returns a
+    `UsageLimit(reset_at)` when the runner reports an account usage limit.
+    `run_events` then sets `terminal = "parked"` instead of `failed`, and carries
+    the reset through `EventSink.done(..., reset_at=)` — which the `done` wire
+    frame also carries.
+12. `QueenSink.on_done` parks: `parked_until` is `reset_at` (or, when the runner
+    gave none, `now + SKEP_PARK_DEFAULT_BACKOFF`, 1 h) plus 0–60 s of jitter,
+    written by `Bookkeeping.park(ref, until)`.
+    The topic gets one `⏸ parked (usage limit) · resumes ~HH:MM` post. The jitter
+    stops a fleet that parked together from resuming in lockstep onto the same
+    limit.
+13. `queen/assembly.py:_park_sweep_loop` is the scheduler: every
+    `SKEP_PARK_SWEEP_INTERVAL` (30 s) it walks `Bookkeeping.parked_due(now)`,
+    skips workers that are not `router.is_online`, and calls
+    `QueenRouter.cmd_resume(ref, origin="sweep")`. `now` is wall-clock, never
+    monotonic — `parked_until` is a POSIX timestamp in the journal, so a queen
+    restart must still see the same deadline. Every edge falls out of
+    re-evaluation: offline worker, full worker, queen restart, an early reset
+    guess (the agent re-hits the limit and re-parks) are all just "retried next
+    tick". The loop runs in **both** runtime shapes — `build_queen` installs it on
+    `app.cleanup_ctx`; single-process `skep.app:main` runs it as a bare task
+    alongside the CEO-retry loop.
+14. `cmd_resume` is the same shape as `cmd_spawn`: look up `(host, profile)`, then
+    either a local `Supervisor` or a `RemoteWorker` that encodes
+    `wire.resume_msg(session_local_id, model, origin)` and sends it. The worker's
+    `WorkerWsClient` decodes it into `Supervisor.resume`.
+15. `Supervisor.resume` opens a **new invocation of the same session**: same
+    worktree, `claude --resume <resume_token>`, and `task_started(...,
+    session_local_id)` back to the queen — where `QueenSink.on_task_started` finds
+    the session via `by_session` and calls `rebind_invocation`, which repoints the
+    **same ref and the same topic** at the new invocation and clears
+    `parked_until`. Output resumes in the topic where it parked.
+
+`/resume <ref> [--model <m>]` drives steps 14–15 by hand, as an early-unpark
+override. It answers optimistically ("Resuming ref N") because the dispatch is
+fire-and-forget on the split path.
+
+**Two things about that loop are easy to get wrong.**
+
+*Where deduplication lives.* `cmd_resume`'s `status != 'running'` check is a cheap
+filter, **not** mutual exclusion — it never writes status, and `running` is set
+only when the worker's `task_started` round-trips back into `rebind_invocation`,
+a window as wide as a process spawn. A human's `/resume` racing the sweep is real.
+The actual guard is `Supervisor.resume`'s `_live_sessions: set[int]` claim, taken
+without an intervening `await` and released in both `resume`'s failure branch and
+`run_events`' `finally`; a duplicate resume raises `ValueError`.
+
+*How a rejection comes back, by shape.* Single-process: the handler **is** a local
+`Supervisor`, so `CapacityError`/`ValueError` raise synchronously into the sweep's
+own `except`. Split-queen: `RemoteWorker.resume` is fire-and-forget (sends a frame,
+returns `0`, can never raise), so the rejection arrives later and out of band as a
+`spawn_rejected` frame carrying `action="resume"` and the echoed `origin`.
+`QueenSink.on_spawn_rejected` **logs instead of posting when `origin == "sweep"`** —
+nothing on the rejection path clears `parked`, so a worker that stays full would
+otherwise page the owner once every sweep tick, forever.
+
 The agent is spawned with roughly:
 
 ```
@@ -120,7 +186,11 @@ Three files are easy to confuse. They do different jobs.
   No I/O, no JSON. The protocols are `EventSink` (worker→queen), `CommandHandler`
   (queen→worker), `QueenInbox` (the queen's callback surface), and `MailboxClient`.
 - **`wire.py`** — the codec. `encode`/`decode` plus one constructor per frame type
-  (`spawn_msg`, `activity_msg`, `heartbeat_msg`, `mailbox_send_msg`, …). Pure data.
+  (`spawn_msg`, `resume_msg`, `activity_msg`, `heartbeat_msg`, `mailbox_send_msg`, …).
+  Pure data. Every field added since the first release is optional and read
+  tolerantly (`session_local_id`, `done.reset_at`, `resume.origin`,
+  `spawn_rejected.action`/`.origin`), so an older worker on the other end of the
+  socket degrades instead of failing.
 - **`auth.py`** — an HMAC challenge-response over `SKEP_SHARED_SECRET`, run **once
   per WebSocket connection**, before the register frame. Mutual: both sides prove
   they know the secret. It has nothing to do with Telegram.
@@ -140,7 +210,7 @@ target exists.
 | Database | Owner | Holds |
 |---|---|---|
 | `Registry` (`db.py`) | worker | its own tasks (each an invocation: `resume_token`, `model`, `session_local_id`) + an audit log |
-| `Bookkeeping` (`queen/bookkeeping.py`) | queen | `ref → (host, profile, local task id, topic id, message id)` |
+| `Bookkeeping` (`queen/bookkeeping.py`) | queen | `ref → (host, profile, local task id, session id, topic id, message id, status, parked_until)` |
 | `Mailbox` (`queen/mailbox.py`) | queen | all inter-agent and agent↔CEO messages |
 
 `Bookkeeping` exists because the Telegram Bot API cannot read topics back — the
@@ -157,6 +227,11 @@ renamed `session_id → resume_token` and added `model` + `session_local_id`
 (back-filled to each row's own id). This is the worker half of the **Sessions**
 model: a task row is now one *invocation*, and invocations sharing a
 `session_local_id` are one session's history (`db.py` invocation-grouping queries).
+
+`Bookkeeping` is versioned the same way, and additively: v0→v1 added
+`session_local_id` (back-filled to each row's own `local_id`), v1→v2 added
+`parked_until`. Both are `ALTER TABLE … ADD COLUMN`, so an older journal opens and
+upgrades in place.
 
 ---
 
@@ -248,29 +323,36 @@ Status is one of **live** (exists in code), **design** (specified, not built), o
 | **env hygiene / default-drop allowlist** | The spawned `claude`'s env is built from a small allowlist (`_CORE_ENV_KEYS` + optional proxy/SSL/`LC_*`), **not** `dict(os.environ)`. Drops the whole `SKEP_*`/`ANTHROPIC_*`/`CLAUDE_CODE_*` namespace so an agent can't read them from its own environ. Widen opt-in via `SKEP_AGENT_ENV_PASSTHROUGH`. | `agent.py:_agent_env` | live (L0.2) |
 | **`CLAUDE_CONFIG_DIR` injection** | The mechanism of profile isolation: the variable is set explicitly from the config-dir arg and **never inherited**. | `agent.py` | live |
 | **token off argv** | The MCP server map (mailbox bearer + memory stdio) is written to a `0600 .skep/mcp.json` and passed as `--mcp-config <path>`, so the per-agent bearer never appears on `/proc/<pid>/cmdline`. | `worker/mcp_config.py` | live (L0.2) |
-| **park & resume** | On a usage-limit hit, mark the task parked-until-reset rather than failed; notify the CEO. | — | design |
+| **park & resume** | On a usage-limit hit, mark the session parked-until-reset rather than failed, tell the topic, and auto-resume it when the limit lifts (§3). | `stream.py` (detect), `supervisor.py` (terminal), `queen/telegram_sink.py` (park), `queen/bookkeeping.py` (`parked_until`), `queen/assembly.py` (sweep) | live (A3) |
 
 ### Sessions
 
 The multi-provider evolution. **A1 (worker-side) is live. A2 (queen-side) is
-*partly* live: the session registry and the `--watch` two-root slice shipped;
-the `primary:rw` lease, parking/`/resume`, and visibility are still not built.**
+*partly* live: the session registry and the `--watch` two-root slice shipped; the
+`primary:rw` lease and visibility are still not built. A3 (usage-limit park &
+auto-resume) is live — it is what finally gave A2's session machinery a caller.**
 
 | Term | Meaning | Lives in | Status |
 |---|---|---|---|
-| **session** | A pinned execution context (host/profile/runner/workspace/worktrees) that owns a Telegram topic and is parkable/resumable. Fleet-global `ref`. | `queen/bookkeeping.py` | live (registry only — parkable/resumable is still design) |
+| **session** | A pinned execution context (host/profile/runner/workspace/worktrees) that owns a Telegram topic and is parkable/resumable. Fleet-global `ref`. | `queen/bookkeeping.py` | live (registry A2; parkable/resumable A3) |
 | **invocation** | One runner run inside a session; holds a `resume_token` + `model`. A `Registry` row **is** an invocation. | `db.py`, `supervisor.py` | live (A1) |
 | **`session_local_id`** | The worker's own session key: a first invocation's == its tid; a resume reuses the origin's. Carried through the worker's register/heartbeat `active_tasks` payload and the queen's replay loop (`QueenWsServer._replay_active`), and through `Bookkeeping` (`session_local_id` column, `by_session()`, `rebind_invocation()`). | `db.py`, `wire.py`, `queen/bookkeeping.py` | live (A1 + A2 registry) |
-| **`QueenSink.on_task_started` ref/topic reuse** | Reuses a known session's `ref` and Telegram topic instead of opening a second one — the topic follows the session. **No live caller yet: nothing calls `on_task_started` with a session `/resume` would exercise, so this branch is tested directly, not through any command path.** | `queen/telegram_sink.py` | live, uncalled until `/resume` |
-| **`spawn_workspace` / `resume`** | Multi-root + model + `session_local_id` spawn; `resume` = a new invocation on the same worktree from a stored `resume_token` (v1-minimal: token+model+`BASE_TOOLS`, no memory/mailbox). | `supervisor.py` | live (A1) |
+| **`QueenSink.on_task_started` ref/topic reuse** | Reuses a known session's `ref` and Telegram topic instead of opening a second one — the topic follows the session, via `rebind_invocation`. A3 gave it its callers: every `/resume` and every sweep-driven auto-resume lands here, and `tests/test_integration.py` drives the branch end to end. | `queen/telegram_sink.py` | live (A2), exercised (A3) |
+| **`spawn_workspace` / `resume`** | Multi-root + model + `session_local_id` spawn; `resume` = a new invocation on the same worktree from a stored `resume_token` (v1-minimal: token+model+`BASE_TOOLS`, no memory/mailbox). A3 added the dedup claim: `_live_sessions` rejects a second resume of a session that already has one in flight. | `supervisor.py` | live (A1; dedup A3) |
 | **`Root` / `Workspace`** | Value types for a multi-root workspace; `requires_lease` flags a `primary:rw` root. A1 ships the predicate; **the lease is still not built — A2 refuses `primary:rw` outright rather than granting it.** | `workspace.py` | live (A1); lease still open |
 | **`worker/roots.py:resolve_roots`** | The security gate: maps root NAMES (never paths) from the wire to paths under the worker's own `repos_root`; refuses (never downgrades) bad names, unknown mode/access, `primary:rw`, `attach`, a non-`new` head root, empty/malformed specs. | `worker/roots.py` | live (A2) |
 | **`--watch`** | `/spawn <host> [--profile p] <repo> [--watch] <task>` — opt-in two-root workspace (own worktree rw + the repo's primary checkout ro), so the agent can see uncommitted work in the operator's tree. Opt-in because a watched checkout may expose secrets never meant for an agent. | `app.py:watch_roots`, `parse_spawn` | live (A2) |
+| **`parked` / `parked_until`** | The fourth terminal (§3): live-but-idle after a usage limit, with a POSIX wake-up deadline on the journal row (`Bookkeeping` schema v2). Counted as *active*, so `/ls` lists it. | `supervisor.py`, `queen/bookkeeping.py` | live (A3) |
+| **`detect_usage_limit`** | The one predicate that decides whether a `result` is a usage limit, and what its reset is. Deliberately the only place that changes when a real limit payload is finally captured. | `stream.py` | live (A3), **heuristic** — see §9 |
+| **park sweep** | The queen's periodic auto-resume loop (`SKEP_PARK_SWEEP_INTERVAL`, 30 s): resume every due-parked session whose worker is online. Runs in both runtime shapes. | `queen/assembly.py:_park_sweep_loop` | live (A3) |
+| **`resume` frame / `cmd_resume`** | The queen→worker sibling of `spawn`: ids only (`session_local_id`, optional `model`, `origin`). Driven by `/resume <ref> [--model]` and by the sweep. | `wire.py:resume_msg`, `queen/router.py` | live (A3) |
+| **`origin="sweep"`** | Tag riding a `resume` dispatch and echoed back on `spawn_rejected`, so a machine-driven rejection is logged rather than posted to the owner. | `wire.py`, `queen/telegram_sink.py` | live (A3) |
 
-> **A1 delivers capability, not behavior.** `resume`, multi-root, and `--model` are
-> reachable only through new methods no caller yet exercises. The queen is untouched
-> except one optional ride-along wire field (`task_started.session_local_id`), which
-> it ignores until A2.
+> **A1 delivered capability, not behavior**, and A2 only partly changed that: its
+> ref/topic-reuse branch had no command path to reach it. **A3 is what wired the
+> behavior** — the queen now owns `cmd_resume` and a background sweep, and
+> `Supervisor.resume` finally has callers. The A1-era claim that "the queen is
+> untouched except one ride-along wire field" is history, not current fact.
 
 ### Vision
 
@@ -308,17 +390,19 @@ the `primary:rw` lease, parking/`/resume`, and visibility are still not built.**
 | L4 | **Earned autonomy + reputation** | not built |
 | L5 | **Mentorship** — mostly L1 applied | not built |
 
-**← you are here:** L0 through L1.1 are merged. **Sessions A2** has landed its
-first slice, on a branch not yet merged to `main`: the queen-side session
-registry (`Bookkeeping` session-scoping, `session_local_id` through
-register/heartbeat replay, `QueenSink.on_task_started` ref/topic reuse) and the
-`/spawn --watch` two-root workspace (`worker/roots.py:resolve_roots`, the
-rw-only memory-shim binding, the READ-ONLY declaration). Still open within A2:
-the `primary:rw` lease table, parking and `/resume` (the ref/topic-reuse branch
-above has no caller until it exists), and `visible`/`spawn_visibility`
-enforcement — plus sub-project C's fleet catalog and D/E, which A2 never
-touched. **L0.2 Increment 2** (PID/mount namespaces for same-UID containment) is
-separately not started.
+**← you are here:** L0 through L1.1 are merged, and so is **Sessions A2**'s first
+slice: the queen-side session registry (`Bookkeeping` session-scoping,
+`session_local_id` through register/heartbeat replay, `QueenSink.on_task_started`
+ref/topic reuse) and the `/spawn --watch` two-root workspace
+(`worker/roots.py:resolve_roots`, the rw-only memory-shim binding, the READ-ONLY
+declaration). **Sessions A3** — usage-limit park & auto-resume (§3) — is on this
+branch, not yet merged to `main`. Still open within A2: the `primary:rw` lease
+table and `visible`/`spawn_visibility` enforcement — plus sub-project C's fleet
+catalog and D/E, which neither A2 nor A3 touched. Deferred out of A3 with reasons
+in its spec: **P2** the multi-account pool (blocked on an unverified
+credential-injection mechanism) and **P3** per-subagent model selection.
+**L0.2 Increment 2** (PID/mount namespaces for same-UID containment) is separately
+not started.
 
 L0 *depends on* Phase 2: the mailbox rides the transport seam. That dependency is
 why the two axes look tangled.
@@ -337,10 +421,11 @@ started*. Increment 1 confirmed on real `claude`; its honest residual is that a
 same-UID sibling can still read the worker's `/proc/<pid>/environ` or the 0600 file.
 
 A **third axis**, orthogonal again, is **Sessions** (see §6): a multi-provider
-evolution split into sub-projects A–E. **A1** (worker-side invocations) is merged;
-**A2** (queen-side) is *partly* shipped — the registry and the `--watch` slice, not
-yet merged to `main`, and not yet the lease/parking/visibility pieces; B–E (runner
-seam, capability catalog, session spawning, Telegram role) are unstarted.
+evolution split into sub-projects A–E. **A1** (worker-side invocations) and the
+first **A2** (queen-side) slice — the registry and `--watch` — are merged; A2's
+lease and visibility pieces are not. **A3** (usage-limit park & auto-resume) is
+built on this branch and awaiting merge. B–E (runner seam, capability catalog,
+session spawning, Telegram role) are unstarted.
 
 ---
 
@@ -360,7 +445,9 @@ task by task, and they were accurate only on the day they ran.
 | `2026-07-05-l0-mcp-shim-spike.md` | Why the shim is shaped as it is | live, but **its topology decision was reversed at build time** |
 | `2026-07-09-l1-memory-substrate-design.md` | — | **superseded by L1.1** |
 | `2026-07-09-l1.1-agent-memory-files-design.md` | The current memory design | live |
-| `2026-07-10-sessions-design.md` | Session/Invocation/Manager model; the A–E split | live (A1 built; A2 registry + `--watch` slice built, lease/parking/visibility still design; B–E design) |
+| `2026-07-10-sessions-design.md` | Session/Invocation/Manager model; the A–E split | live (A1 + A2 registry/`--watch` + A3 park/resume built; A2's lease and visibility still design; B–E design) |
+| `2026-07-22-sessions-a2-queen-sessions-design.md` | The queen-side session registry and the `--watch` workspace | live (lease + visibility still design) |
+| `2026-07-24-sessions-a3-usage-limit-park-resume-design.md` | Why park-and-sweep rather than per-session timers; the two runtime shapes' rejection contracts; the deferred P2/P3 | live (built) — but **§5/§6 were corrected mid-build**: the status check was originally written as if it serialised concurrent resumes, and it does not (§3 above, §9 below) |
 | `2026-07-16-l0.2-increment1-...` (plan) | How env hygiene + token-off-argv were built | history (executed) |
 
 `.claude/memory/project.md` is the decision log, and it is the **only** place the
@@ -407,6 +494,32 @@ worth knowing before you touch the code.
   `session_local_id`, so a reconnecting A2 queen no longer loses session identity
   on replayed active tasks. (It was still open as of the previous stamp; this is
   no longer a sharp edge, kept here only as the paper trail.)
+- **`cmd_resume`'s `status != 'running'` check looks like a concurrency guard and
+  is not one.** It never writes status, so it cannot exclude anything; it is a cheap
+  filter. The real dedup is `Supervisor.resume`'s `_live_sessions` claim (§3). The A3
+  spec asserted the wrong thing here before it was corrected mid-build — if you find
+  that claim anywhere else, it is stale.
+- **The usage-limit detector is a text heuristic that has never met a real usage
+  limit.** `stream.detect_usage_limit` matches `raw["subtype"] == "usage_limit"` or
+  the strings `"usage limit reached"` / `"usage limit exceeded"` — all guesses. The
+  real payload was never captured (A3 spec §8.1), and every test drives a synthetic
+  event. Treat A3's detection as **coded, not verified**, the same way the L1.1 claim
+  above is. If the provider's wording drifts, a limit silently becomes `failed` again
+  — no worse than pre-A3, but silent. `detect_usage_limit` is the single change point
+  when a real event is finally captured.
+- **Sweep-origin rejection suppression is total, and there is no give-up counter.**
+  `QueenSink.on_spawn_rejected` drops (logs at INFO) every rejection tagged
+  `origin="sweep"`. That is deliberate — a full worker would otherwise page the owner
+  every 30 s forever — but it also means a *permanently* failing parked entry (say
+  `"no such session"` after a worker's DB was wiped) retries every tick, forever,
+  and the owner is never told. Nothing counts attempts and nothing gives up. Note
+  the exception type is not a usable discriminator either: `"already has a live
+  invocation"` is a benign, expected `ValueError` on the same path.
+- **`cmd_resume` routes on worker *registration*; the sweep additionally gates on
+  `is_online`.** Deliberate — a bulk background loop should skip disconnected
+  workers, while an explicit human `/resume` should not be silently swallowed — but
+  it reads as an inconsistency, and it means the two callers of the same method have
+  different reachability rules.
 - **`RemoteWorker.spawn` returning `0` is load-bearing for Sessions.** The queen mints
   a session `ref` only *after* `task_started`, so at first spawn there is no ref to key
   by — which is exactly why the worker owns `session_local_id` and A2 maps ref→it,

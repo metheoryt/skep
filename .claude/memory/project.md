@@ -5,6 +5,49 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 ## Decisions
 
+- **Sessions A3 DONE (2026-07-24, branch `metheoryt/ubuntu26-skep-A2-resume`).**
+  Usage-limit park + auto-resume. `detect_usage_limit` (stream.py) isolates the
+  limit shape and returns `UsageLimit(reset_at)`; `run_events` emits a `parked`
+  terminal carrying `reset_at`; `Bookkeeping.parked_until` (schema v2) +
+  `park`/`parked_due`; `QueenSink.on_done` parks (keeps the mailbox — no
+  `handle_recipient_gone` — and posts "resumes ~HH:MM", default backoff 1 h +
+  0–60 s jitter when the reset is unknown); `/resume <ref> [--model]` + a `resume`
+  wire frame → `Supervisor.resume` (A1); `_park_sweep_loop` (mirrors CEO-retry)
+  auto-resumes due-parked sessions on ONLINE workers. Five things that only
+  emerged during the build and are easy to re-break:
+  (1) **Dedup lives in `Supervisor.resume`, not `cmd_resume`.** `cmd_resume`'s
+  `status != 'running'` is a cheap FILTER — it never writes status, and `running`
+  is only set when the worker's `task_started` round-trips into
+  `rebind_invocation`, so two callers can race. The real claim is
+  `Supervisor._live_sessions: set[int]`, taken with no intervening `await` and
+  released in both `resume`'s failure branch and `run_events`' `finally`; a
+  duplicate raises `ValueError`. The spec asserted the opposite and was corrected
+  (§5/§6).
+  (2) **The sweep runs in BOTH shapes:** split-queen installs it on
+  `app.cleanup_ctx` in `build_queen`; single-process `skep.app:main` runs it as a
+  bare task. `build_worker_and_router` also had to call `router.mark_online(...)`
+  — without it the in-process worker read as detached forever and the sweep (which
+  skips offline workers) auto-resumed nothing.
+  (3) **The two shapes reject differently.** `RemoteWorker.resume` is
+  fire-and-forget (returns 0, never raises) so rejections come back later as a
+  `spawn_rejected` frame; single-process raises `CapacityError`/`ValueError`
+  synchronously into the sweep's own `except`. Both are load-bearing.
+  (4) **`origin` on the resume frame** (echoed into `spawn_rejected`, alongside
+  `action` so the verb matches) makes `QueenSink.on_spawn_rejected` LOG instead of
+  post when `origin == "sweep"` — otherwise a full worker produced one owner
+  Telegram message every sweep tick (30 s) forever. A human's `/resume` still
+  notifies, because it answers optimistically and the failure arrives async.
+  (5) **`Supervisor.resume` seeds the new row with `resume_token=prev.resume_token`**
+  — `latest_invocation` is `ORDER BY id DESC LIMIT 1`, so a tokenless newest row
+  made every later resume fail permanently.
+  **Deferred:** P2 multi-account pool (gated on the credential-injection spike —
+  the Orca-spawned claude carries no credential env var, mechanism unconfirmed/
+  possibly racy) and P3 per-subagent model. **Residuals:** detection is a text
+  heuristic until a real usage-limit event is captured (design §8.1); and
+  sweep-origin suppression is TOTAL — a permanently-failing parked entry retries
+  every tick forever at INFO with no give-up counter, and the exception type is not
+  a usable discriminator ("already has a live invocation" is benign).
+
 - **L0.2 Increment 1 DONE (2026-07-16, branch `feat/skep-l0.2-increment1`,
   re-planned against current main after the abandoned
   `feat/skep-l0.2-per-agent-isolation` went stale under 54 commits of L1.1 +
