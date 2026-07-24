@@ -16,6 +16,7 @@ from skep.discovery import advertise
 from skep.queen.assembly import (  # noqa: E402,F401
     _ceo_retry_loop,
     _install_ceo_retry,
+    _install_park_sweep,
     _mailbox_db_path,
     build_mailbox_service,
     make_ceo_callbacks,
@@ -57,6 +58,8 @@ def build_queen(
     ).attach(app)
     if qcfg.mailbox_ceo_retry_interval > 0:
         _install_ceo_retry(app, mailbox_service, qcfg.mailbox_ceo_retry_interval)
+    if qcfg.park_sweep_interval > 0:
+        _install_park_sweep(app, bk, router, qcfg.park_sweep_interval)
     dp = build_dispatcher(
         router, qcfg, mailbox_service=mailbox_service, mailbox=mailbox
     )

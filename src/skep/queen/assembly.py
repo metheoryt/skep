@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Protocol
@@ -28,6 +29,8 @@ from skep.queen.mailbox import (
     Message,
     PermanentDeliveryError,
 )
+from skep.queen.router import QueenRouter
+from skep.supervisor import CapacityError
 from skep.telegram_gw import Gateway
 
 log = logging.getLogger(__name__)
@@ -59,6 +62,61 @@ def _install_ceo_retry(
 
     async def _ctx(app: web.Application) -> AsyncIterator[None]:
         task = asyncio.create_task(_ceo_retry_loop(service, interval))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app.cleanup_ctx.append(_ctx)
+
+
+async def _park_sweep_loop(
+    bk: Bookkeeping,
+    router: QueenRouter,
+    interval: float,
+    now: Callable[[], float] = time.time,
+) -> None:
+    """Periodically auto-resume due-parked sessions.
+
+    `now` is wall-clock on purpose (never monotonic): `parked_until` is a POSIX
+    timestamp written to the journal, so a queen restart must still see the same
+    deadline. Edges fall out of re-evaluation rather than bespoke handling: an
+    offline worker is skipped and retried next tick; a full worker raises
+    CapacityError and is retried next tick; a queen restart just resumes finding
+    due rows. Never lets one bad entry kill the loop.
+    """
+    while True:
+        try:
+            for entry in bk.parked_due(now()):
+                if not router.is_online(entry.host, entry.profile):
+                    continue
+                try:
+                    await router.cmd_resume(entry.ref)
+                except CapacityError:
+                    continue
+                except Exception:
+                    log.warning(
+                        "park sweep: resume of ref %s failed",
+                        entry.ref,
+                        exc_info=True,
+                    )
+        except Exception:
+            log.warning("park sweep pass failed", exc_info=True)
+        await asyncio.sleep(interval)
+
+
+def _install_park_sweep(
+    app: web.Application,
+    bk: Bookkeeping,
+    router: QueenRouter,
+    interval: float,
+) -> None:
+    """Tie the park sweep to the web app's lifecycle (mirrors _install_ceo_retry)."""
+
+    async def _ctx(app: web.Application) -> AsyncIterator[None]:
+        task = asyncio.create_task(_park_sweep_loop(bk, router, interval))
         try:
             yield
         finally:
