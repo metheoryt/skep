@@ -102,19 +102,23 @@ class QueenSink:
         if entry is None:
             return
         if status == "parked":
-            base = (
-                reset_at
-                if reset_at is not None
-                else self._now() + self._park_default_backoff
-            )
-            # Floor the deadline forward. `reset_at` reaches us from
+            # A reset in the past is not a reset -- treat it as unparseable and
+            # fall back to the default backoff. `reset_at` reaches us from
             # stream.detect_usage_limit, which has never met a real usage-limit
-            # event (A3 spec 8.1) -- so it is not KNOWN to be a POSIX epoch. If
-            # the real payload turns out to carry a duration ("3600"), every
-            # park would land in 1970: due on the next sweep tick, resumed into
-            # the same limit, re-parked at the same past instant, and a fresh
-            # "parked" notice posted to the topic -- every 30 s, forever. A
-            # clock skew or a provider's already-elapsed reset does the same.
+            # event (A3 spec 8.1), so it is not KNOWN to be a POSIX epoch. If the
+            # real payload turns out to carry a duration ("3600"), every park
+            # would land in 1970: due on the next sweep tick, resumed into the
+            # same limit, re-parked at the same past instant, and a fresh
+            # "parked" notice posted to the topic -- forever. Backing off the
+            # full hour rather than to the floor below keeps that thrash to the
+            # same rate as a limit we could not read at all. Clock skew and a
+            # provider's already-elapsed reset land here too.
+            if reset_at is None or reset_at <= self._now():
+                base = self._now() + self._park_default_backoff
+            else:
+                base = reset_at
+            # Belt and braces: a default backoff configured at 0 would still put
+            # the deadline in the past.
             base = max(base, self._now() + _MIN_PARK_BACKOFF)
             until = base + self._jitter()
             self._bk.park(entry.ref, until)

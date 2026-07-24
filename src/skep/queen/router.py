@@ -94,10 +94,11 @@ class QueenRouter:
         if entry.status == "parked":
             # A parked session has NO process: `local_id` names the invocation
             # that already died on the usage limit. Sending a kill frame is at
-            # best a no-op and at worst a lie -- RemoteWorker.kill returns True
-            # unconditionally, so the split queen answered "Killed" while the
-            # row stayed parked, stayed in _ACTIVE, stayed in parked_due, and
-            # the sweep auto-resumed it at the next reset. End the session here
+            # best a no-op and at worst a lie -- BOTH shapes answered "Killed",
+            # because this function discarded the handler's return value (and
+            # RemoteWorker.kill returns True unconditionally anyway) -- while
+            # the row stayed parked, stayed in _ACTIVE, stayed in parked_due,
+            # and the sweep auto-resumed it at the next reset. End the session
             # instead: 'killed' is outside both _ACTIVE and parked_due, so the
             # sweep stops seeing it and the answer becomes true. This is also
             # the only way to cancel a parked session at all.

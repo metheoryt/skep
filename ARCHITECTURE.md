@@ -102,10 +102,10 @@ does (it skips the mailbox `handle_recipient_gone` teardown on a park), and
 
 `/kill <ref>` is the one way to *end* a parked session. `cmd_kill` special-cases
 `parked` and never round-trips to the worker — a parked entry's `local_id` names
-the invocation that already died, and `RemoteWorker.kill` returns `True`
-regardless, so the split queen used to answer "Killed" while the row stayed
-`parked`, stayed in `_ACTIVE`, stayed in `parked_due`, and the sweep resumed it
-at the next reset. It writes `killed` to the journal directly (outside both
+the invocation that already died. Both shapes used to answer "Killed" for it:
+`cmd_kill` discarded the handler's return value, and `RemoteWorker.kill` returns
+`True` unconditionally anyway. Meanwhile the row stayed `parked`, stayed in
+`_ACTIVE`, stayed in `parked_due`, and the sweep resumed it at the next reset. It writes `killed` to the journal directly (outside both
 `_ACTIVE` and `parked_due`, so the sweep stops seeing it) and runs the mailbox
 teardown the missing `done` event would otherwise have carried — passed down
 from the `/kill` handler in `build_dispatcher` as `on_session_ended`, so the one

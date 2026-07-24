@@ -220,6 +220,19 @@ def test_parked_done_clamps_a_past_reset_forward():
     assert bk.get(ref).parked_until >= now + _MIN_PARK_BACKOFF
 
 
+def test_parked_done_treats_a_past_reset_as_unreadable():
+    """A reset already in the past is not a reset. Falling back to the full
+    default backoff -- not to the floor -- keeps a duration-shaped `reset_at`
+    thrashing no faster than a limit we could not read at all. Without this the
+    floor alone still resumes, re-hits the limit and re-posts every ~60 s."""
+    now = 1_700_000_000.0
+    bk = Bookkeeping.open(":memory:")
+    ref = bk.add("h", "p", 1, "repo", "task", topic_id=100)
+    sink = QueenSink(_FakeGateway(), bk, now=lambda: now, jitter=lambda: 0.0)
+    asyncio.run(sink.on_done("h", "p", 1, "parked", "limit", reset_at=3600.0))
+    assert bk.get(ref).parked_until == now + 3600.0  # the backoff, not the floor
+
+
 def test_parked_done_leaves_a_future_reset_untouched():
     """The floor is a floor, not a delay: a sane reset is used verbatim."""
     bk, ref, gw, sink = _sink_with_entry()   # now = 1000.0, jitter = 0
