@@ -194,6 +194,40 @@ async def test_failed_resume_leaves_the_session_resumable(
 
 
 @pytest.mark.asyncio
+async def test_a_registry_failure_before_the_try_does_not_leak_the_claim(
+    worker_config_no_memory, fake_sink
+):
+    """The claim is released only by resume's own `except` and by run_events'
+    `finally` -- both inside the try. Anything that raises between the claim and
+    that try leaks it for the life of the process, permanently blocking the
+    session. So the claim must not be taken until the try owns it.
+    """
+    reg = Registry.open(":memory:")
+    sid = _parked_session(reg)
+    sup = Supervisor(
+        worker_config_no_memory, reg, fake_sink,
+        agent_factory=lambda **k: FakeAgent(), worktree_factory=lambda *a: None,
+    )
+
+    real_add_task = reg.add_task
+    calls = []
+
+    def flaky_add_task(*a, **k):
+        calls.append(a)
+        if len(calls) == 1:
+            raise RuntimeError("sqlite is having a day")
+        return real_add_task(*a, **k)
+
+    reg.add_task = flaky_add_task
+    with pytest.raises(RuntimeError):
+        await sup.resume(sid)
+
+    tid = await sup.resume(sid)  # the claim was never stranded
+    await _drain(sup)
+    assert reg.get_task(tid).session_local_id == sid
+
+
+@pytest.mark.asyncio
 async def test_successful_resume_records_the_newly_streamed_token(
     worker_config_no_memory, fake_sink
 ):

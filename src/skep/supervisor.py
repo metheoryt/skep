@@ -280,15 +280,17 @@ class Supervisor:
         # /resume and the queen's park sweep), and every upstream filter is
         # stale by the time it lands here: the journal's status only becomes
         # 'running' once task_started round-trips back to the queen. Nothing
-        # between this check and the add may await -- that is what makes the
-        # pair atomic under single-threaded asyncio, and a second resume that
-        # slipped through would give one worktree two `claude --resume`
-        # processes sharing one resume_token. Reject, never queue.
+        # between this check and the add (below, first statement in the try) may
+        # await -- that is what makes the pair atomic under single-threaded
+        # asyncio, and a second resume that slipped through would give one
+        # worktree two `claude --resume` processes sharing one resume_token.
+        # Reject, never queue. The check stays HERE, ahead of add_task, so a
+        # rejected duplicate never leaves a dangling task row behind (matching
+        # the two rejections above it).
         if session_local_id in self._live_sessions:
             raise ValueError(
                 f"session {session_local_id} already has a live invocation"
             )
-        self._live_sessions.add(session_local_id)
 
         worktree_path = Path(prev.worktree_path)
         tid = self._reg.add_task(prev.repo, prev.task, prev.worktree_path, mode="native")
@@ -308,6 +310,11 @@ class Supervisor:
 
         agent: AgentProcess | None = None
         try:
+            # Take the claim only once the try owns it: this except and
+            # run_events' finally are the ONLY two paths that release it, so a
+            # claim taken above would be stranded for the life of the process by
+            # any raise in between -- permanently blocking the session.
+            self._live_sessions.add(session_local_id)
             self._reg.log_audit(tid, "resume", f"resume session {session_local_id}")
             agent_kwargs: dict[str, Any] = dict(
                 task_text=prev.task,

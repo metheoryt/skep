@@ -160,9 +160,10 @@ async def _park_sweep(bk, router, interval, now):
             if not router.is_online(entry.host, entry.profile):
                 continue                          # worker gone — next tick
             try:
-                await router.cmd_resume(entry.ref)
+                await router.cmd_resume(entry.ref, origin="sweep")
             except CapacityError:
                 continue                          # worker full — next tick
+                                                  # (single-process only; see below)
         await asyncio.sleep(interval)
 ```
 
@@ -173,9 +174,33 @@ instead of bespoke handling:
 |---|---|
 | Worker offline at reset T | `is_online` false → skipped; resumed automatically the first tick after it reconnects |
 | Queen restart | `parked_until` lives in the journal; the sweep just resumes finding due entries — no timer state to rebuild |
-| Worker at capacity | `CapacityError` → skipped, retried next tick |
+| Worker at capacity | Retried next tick either way, but **how the rejection arrives differs by runtime shape** — see below |
 | Reset time guessed early | resume → runner re-hits the limit → re-parks with a fresh `parked_until` — self-correcting |
 | Manual `/resume` races the sweep | §5: the status check filters the common case but does NOT serialise the race — `Supervisor.resume` must reject a session that already has a live invocation |
+
+**A full worker rejects differently in each of the two runtime shapes, and the
+pseudocode above only covers one of them.** It was written as if `cmd_resume` always
+raised — that is true in only one shape, and the code now says so.
+
+- **Single-process (`skep`)** — the router's handler *is* a local `Supervisor`, so
+  `CapacityError` (and `ValueError`) propagate out of `cmd_resume` synchronously. The
+  sweep's own `except CapacityError: continue` is what catches it, exactly as drawn.
+  Nothing reaches Telegram.
+- **Split-queen (`skep-queen` + `skepd`)** — the handler is a `RemoteWorker`, whose
+  `resume` is fire-and-forget: it sends a WS frame and returns `0`. It can never raise,
+  so the sweep's `except CapacityError` never fires on this path. The worker turns
+  `CapacityError`/`ValueError` into a `spawn_rejected` frame that arrives back at the
+  queen *asynchronously*, out of band with the sweep pass that caused it.
+
+Both shapes run the sweep, and in both the entry stays parked and is retried next tick
+— nothing on the rejection path clears `parked` or bumps `parked_until`. That makes the
+split-queen rejection a *repeating* event: a worker that stays full re-rejects the same
+entry every `SKEP_PARK_SWEEP_INTERVAL` for the whole busy period. So every sweep
+dispatch is tagged `origin="sweep"`, the worker echoes the tag back on the
+`spawn_rejected`, and `QueenSink.on_spawn_rejected` logs those instead of posting —
+otherwise one full worker would page the owner ~2,880 times a day. A human's `/resume`
+carries no origin and is still notified, because `/resume` answers optimistically
+("Resuming ref N") and the real failure only arrives on this path.
 
 Config (env, `QueenConfig`): `SKEP_PARK_SWEEP_INTERVAL` (default 30 s). The sweep is
 idempotent and cheap — one indexed query per tick.
