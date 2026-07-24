@@ -225,7 +225,16 @@ def build_dispatcher(
                 "Usage: /resume <ref> [--model <m>]", parse_mode=None
             )
             return
-        ok = await router.cmd_resume(int(args[0]), model)
+        try:
+            ok = await router.cmd_resume(int(args[0]), model)
+        except (CapacityError, ValueError) as exc:
+            # Single-process: the router's handler IS a Supervisor, so "at
+            # capacity", "no such session", "no resume_token" and "already has a
+            # live invocation" raise straight through this handler and the owner
+            # would get silence. Split-queen reports the same rejections out of
+            # band as `spawn_rejected`. Mirrors _spawn.
+            await message.answer(f"Rejected: {exc}", parse_mode=None)
+            return
         await message.answer(
             f"Resuming ref {args[0]}" if ok else "No such session / already running",
             parse_mode=None,
@@ -276,7 +285,12 @@ async def main() -> None:
     bk = Bookkeeping.open(qcfg.bookkeeping_db)
     mailbox = Mailbox.open(_mailbox_db_path(qcfg.bookkeeping_db))
     mailbox_service = build_mailbox_service(qcfg, gateway, bk, mailbox)
-    sink = QueenSink(gateway, bk, mailbox_service=mailbox_service)
+    sink = QueenSink(
+        gateway,
+        bk,
+        mailbox_service=mailbox_service,
+        park_default_backoff=qcfg.park_default_backoff,
+    )
     registry = Registry.open(wcfg.db_path)
     router, _ = build_worker_and_router(
         wcfg, sink, bk, registry, mailbox_service=mailbox_service

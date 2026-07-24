@@ -13,7 +13,7 @@ from skep.config import QueenConfig, WorkerConfig
 from skep.db import Registry
 from skep.queen.bookkeeping import Bookkeeping
 from skep.queen.mailbox import Mailbox, MailboxService
-from skep.supervisor import Supervisor
+from skep.supervisor import CapacityError, Supervisor
 from skep.transport import SwitchableMailboxClient
 
 
@@ -346,9 +346,74 @@ async def test_resume_command_reports_failure(dispatcher, router):
     )
 
 
+async def test_resume_reports_a_synchronous_capacity_rejection(dispatcher, router):
+    """In single-process mode the router's handler IS a Supervisor, so a
+    rejection raises straight through this handler and the owner gets silence.
+    Split-queen reports the same rejections via `spawn_rejected`; /spawn already
+    catches them here. Mirror /spawn."""
+    router.cmd_resume.side_effect = CapacityError("at capacity (8 running)")
+    answer = await _send(dispatcher, "/resume 5")
+    answer.assert_awaited_once_with(
+        "Rejected: at capacity (8 running)", parse_mode=None
+    )
+
+
+async def test_resume_reports_a_synchronous_value_error(dispatcher, router):
+    """"no such session", "no resume_token" and "already has a live invocation"
+    all reach the single-process handler as ValueError."""
+    router.cmd_resume.side_effect = ValueError("no such session: 7")
+    answer = await _send(dispatcher, "/resume 5")
+    answer.assert_awaited_once_with("Rejected: no such session: 7", parse_mode=None)
+
+
 async def test_resume_command_rejects_non_numeric(dispatcher, router):
     answer = await _send(dispatcher, "/resume abc")
     router.cmd_resume.assert_not_awaited()
     answer.assert_awaited_once_with(
         "Usage: /resume <ref> [--model <m>]", parse_mode=None
     )
+
+
+# -- main() (single-process) wiring ---------------------------------------
+
+
+async def test_main_passes_park_default_backoff_to_the_sink(tmp_path, monkeypatch):
+    """`build_queen` threads qcfg.park_default_backoff into its QueenSink;
+    main() did not, so SKEP_PARK_DEFAULT_BACKOFF silently did nothing on the
+    `skep` entrypoint while its sibling SKEP_PARK_SWEEP_INTERVAL was honoured
+    there. build_queen's wiring has tests and main()'s had none -- the same gap
+    that hid the mark_online bug (136c954)."""
+    import skep.app as app_mod
+
+    for key, value in {
+        "SKEP_BOT_TOKEN": "123:abc",
+        "SKEP_OWNER_ID": "42",
+        "SKEP_GROUP_CHAT_ID": "-100",
+        "SKEP_QUEEN_DB": ":memory:",
+        "SKEP_DB": ":memory:",
+        "SKEP_REPOS_ROOT": str(tmp_path),
+        "SKEP_WORKTREES_ROOT": str(tmp_path / "wt"),
+        "SKEP_PARK_DEFAULT_BACKOFF": "120",
+        # Both background loops off: this test is about the wiring, not the
+        # loops, and a live task would outlive the fake polling call below.
+        "SKEP_PARK_SWEEP_INTERVAL": "0",
+        "SKEP_MAILBOX_CEO_RETRY_INTERVAL": "0",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    seen: list[dict] = []
+    real_sink = app_mod.QueenSink
+
+    def _capture(*args, **kwargs):
+        seen.append(kwargs)
+        return real_sink(*args, **kwargs)
+
+    monkeypatch.setattr(app_mod, "QueenSink", _capture)
+    monkeypatch.setattr(app_mod, "build_bot", lambda cfg: MagicMock())
+    fake_dp = MagicMock()
+    fake_dp.start_polling = AsyncMock()
+    monkeypatch.setattr(app_mod, "build_dispatcher", lambda *a, **k: fake_dp)
+
+    await app_mod.main()
+
+    assert seen and seen[0].get("park_default_backoff") == 120.0
