@@ -130,7 +130,9 @@ class Supervisor:
         agent: AgentProcess | None = None
         shim: MailboxShim | None = None
         try:
-            if head.mode == MODE_NEW:
+            # `branch is not None` iff head.mode == MODE_NEW (see above); testing
+            # the branch keeps its non-None-ness visible to the type checker.
+            if branch is not None:
                 self._worktree_factory(head.path, head_path, branch)
             self._reg.log_audit(tid, "spawn", f"{head.name}: {task}")
 
@@ -293,7 +295,9 @@ class Supervisor:
             )
 
         worktree_path = Path(prev.worktree_path)
-        tid = self._reg.add_task(prev.repo, prev.task, prev.worktree_path, mode="native")
+        tid = self._reg.add_task(
+            prev.repo, prev.task, prev.worktree_path, mode="native"
+        )
         # A resume is a NEW invocation of the SAME session. It inherits the
         # token it is resuming FROM: this row is latest_invocation for the
         # session from here on, so leaving it NULL when the agent dies before

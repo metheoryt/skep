@@ -2,10 +2,14 @@
 
 Wire protocol (4 frames, JSON dicts with a ``"t"`` discriminator):
 
-- ``challenge``  (server -> client): ``{"t": "challenge", "nonce": <server_nonce>}``
-- ``auth``       (client -> server): ``{"t": "auth", "nonce": <client_nonce>, "proof": <hmac>}``
-- ``auth_ok``    (server -> client): ``{"t": "auth_ok", "proof": <hmac>}`` on success
-- ``auth_error`` (server -> client): ``{"t": "auth_error"}`` sent before the server
+- ``challenge``  (server -> client):
+  ``{"t": "challenge", "nonce": <server_nonce>}``
+- ``auth``       (client -> server):
+  ``{"t": "auth", "nonce": <client_nonce>, "proof": <hmac>}``
+- ``auth_ok``    (server -> client):
+  ``{"t": "auth_ok", "proof": <hmac>}`` on success
+- ``auth_error`` (server -> client):
+  ``{"t": "auth_error"}`` sent before the server
   raises ``AuthError``, so the client (blocked on ``recv()``) is unblocked instead
   of deadlocking, e.g. under ``asyncio.gather(..., return_exceptions=True)``.
 """

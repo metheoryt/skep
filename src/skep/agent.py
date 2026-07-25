@@ -117,7 +117,8 @@ class AgentProcess:
             self._task_text,
             "--output-format",
             "stream-json",
-            # --input-format stream-json is Phase 2 (soft-steer); Phase 1 is one-shot via -p
+            # --input-format stream-json is Phase 2 (soft-steer); Phase 1 is
+            # one-shot via -p
             "--verbose",
         ]
         if self._append_system_prompt is not None:

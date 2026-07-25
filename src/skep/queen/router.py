@@ -134,7 +134,13 @@ class QueenRouter:
         handler = self._workers.get((entry.host, entry.profile))
         if handler is None:
             return False
-        await handler.resume(entry.session_local_id, model=model, origin=origin)
+        # The column is nullable (the v2 migration backfills it from local_id), so
+        # a NULL row is a bookkeeping fault, not a resumable session — reject it
+        # rather than hand None to a resume that keys the session on it.
+        sid = entry.session_local_id
+        if sid is None:
+            return False
+        await handler.resume(sid, model=model, origin=origin)
         return True
 
     async def cmd_panic(self) -> int:
