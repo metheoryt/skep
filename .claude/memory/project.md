@@ -612,6 +612,32 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   sub-project D); sub-project C's fleet catalog and `workspaces.yaml` (the
   worker resolves names from its own `repos_root` instead, sidestepping C for
   now); topic close/reopen ↔ park/resume binding (sub-project E owns it).
+- **Buzz (Block, open-sourced 2026-07-21) surveyed 2026-07-25 — skep CONTINUES;
+  the execution plane is the asset, the Telegram layer is provisional.** Full memo:
+  `docs/2026-07-25-buzz-comparison-memo.md`. Buzz is a Nostr-relay collaboration
+  substrate (signed event log, per-participant keypairs, channels, NIP-34 git,
+  YAML workflows, ACP harness). Its seam sits ABOVE skep's: it has NO concept of
+  host, credential profile, or per-task worktree, and no usage-limit park/resume —
+  i.e. it duplicates skep's queen/Telegram half (`Bookkeeping` would evaporate; it
+  exists only because the Bot API can't read topics back) and none of the worker
+  half where A1–A3 and L0.2 went. Three consequences: (1) do **Sessions B (runner
+  seam) next**, before more Telegram-side work; (2) **ACP is the seam's SHAPE, not
+  a replacement for the `claude` path** — Claude Code has no native ACP surface,
+  Buzz reaches it via the third-party `@agentclientprotocol/claude-agent-acp`
+  wrapping the *Agent SDK* with `ANTHROPIC_API_KEY`, which would cost subscription
+  auth, `CLAUDE_CONFIG_DIR` profile isolation, and the `stream-json` events that
+  `parse_event`/`detect_usage_limit` need; keep native `claude -p` as
+  implementation #1, ACP as #2 for Codex/Goose; (3) stop investing in
+  `Bookkeeping`-shaped Bot-API workarounds — new control-surface work should assume
+  the surface may change. Borrow list beyond ACP, ranked: per-agent keypair + signed
+  action log (the missing substrate under L4 reputation), agents as durable room
+  members rather than per-task topics (that IS L2), workflow triggers + approval
+  gates as data (skep's unbuilt Phase 3 brakes). Adopting Buzz wholesale as the
+  front end is last: Postgres+Redis+S3/MinIO+relay vs today's `uv run skep`, on a
+  four-day-old project with one non-replicated relay. Discriminator if this is ever
+  revisited: multi-participant audited workspace ⇒ invert skep (keep the worker,
+  drop Telegram, join a relay); private single-operator fleet driver ⇒ Buzz replaces
+  nothing.
 
 ## Gotchas
 
