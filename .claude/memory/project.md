@@ -3,6 +3,8 @@
 <!-- Repo-local, git-tracked, auto-loaded at session start. Durable project facts
 only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
+<!-- KB refreshed against 9266874 on 2026-09-12 -->
+
 ## Decisions
 
 - **Sessions A3 — usage-limit park & auto-resume.** `ARCHITECTURE.md` §6
@@ -589,6 +591,55 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   drop Telegram, join a relay); private single-operator fleet driver ⇒ Buzz replaces
   nothing.
 
+- **Postgres + Hermes borrows + Nostr designed together (2026-07-26,
+  `docs/superpowers/specs/2026-07-26-skep-postgres-nostr-hermes-borrows-design.md`).**
+  The repo's newest and largest spec, and neither this log nor `ARCHITECTURE.md`
+  §8's spec table referenced it at all. Three changes designed as one because
+  they touch the same seams — transport, persistence, agent capability:
+  (1) the three SQLite files (Registry, Bookkeeping, Mailbox) collapse into a
+  single Postgres instance with three schemas; the split was bottom-up build
+  order, not design, and SQLite WAL's single writer is what bites once spawn +
+  park sweep + CEO retry + heartbeat replay contend. (2) Seven capability
+  borrows from Hermes — skills as procedural memory (**L1.2**), fleet memory as
+  declarative memory (**L1.3**), a cron scheduler replacing the three hardcoded
+  loops, delegation (L3), approval gates (the Phase 3 brakes), credential pools,
+  and the curator pattern. (3) Nostr **event signing only** — signed events in
+  the audit log, relay deferred behind the Buzz memo's discriminator, because
+  signing needs no transport change. Five resolved decisions worth not
+  re-litigating: workers connect to Postgres **directly** on a shared
+  `DATABASE_URL` (not queen-proxied — revisit only if a worker must be
+  network-isolated); skills are **per-profile** at `~/.skep/skills/<profile>/`,
+  matching the existing profile isolation; no relay; credentials ride
+  `SKEP_CREDENTIAL_POOL_<PROFILE>` env vars, Vault later; the curator is a queen
+  cron job running in-process beside the park sweep. The build order is
+  load-bearing, not a wish list — **Postgres first because it unblocks
+  everything else**, then cron, skills, fleet memory, Nostr signing, credential
+  pools, delegation, approval gates, curator last (it curates what the others
+  produce). Two standing entries are reshaped by it: Sessions A3's deferred P2
+  multi-account pool is now designed as the credential pool (§2.6), and the
+  queen-hosted shared-memory phase is now split into L1.2 skills + L1.3 fleet
+  memory (§2.1/§2.2).
+  <!-- conflicts-with: "the deferred P2 multi-account pool and P3" -->
+  <!-- conflicts-with: "**Shared vector memory (queen-hosted blackboard) → its own later phase, after P2/P3**" -->
+  <!-- src: skep 9266874 | 2026-09-12 -->
+
+- **The 20 committed `gortex-*` generated skills were deleted and the directory
+  gitignored (2026-07-25) — they cannot come back into the repo.**
+  `.claude/skills/generated/` is now in `.gitignore`, so a future bare
+  `gortex init` (ours or a teammate's) regenerates them locally and commits
+  nothing. They were **never indexed** — `.claude/` is in gortex's builtin
+  exclude list — so their cost was never graph pollution; it was the
+  `## Community Skills` table they shipped with, which `CLAUDE.md`/`AGENTS.md`
+  injected into every agent session while pointing at pre-rename `fleetd`
+  symbols that no longer exist. That table is gone from both files. The same
+  change added `.gortex.yaml`, which excludes **`docs/superpowers/plans/` and
+  nothing else**: those plans are declared history, they were the bulk of the
+  repo's indexed markdown, and they were competing with `ARCHITECTURE.md` for
+  graph attention. `docs/superpowers/specs/` stays indexed on purpose — it is
+  where *why* lives.
+  <!-- conflicts-with: "still says \"fleetd\" — machine-managed, regenerates on reindex." -->
+  <!-- src: skep 9266874 | 2026-09-12 -->
+
 ## Gotchas
 
 - **Both former entries here were `claude` CLI behaviour, not skep facts, and
@@ -601,6 +652,15 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   (`agent.py._argv` / `start`), so the Phase-3 soft-steer must reintroduce
   `--input-format stream-json` *and* actually write a stream-json user message to
   stdin *and* keep the pipe managed — don't naively re-add the flag.
+
+- **`uvx ty check src` cannot run on a fresh checkout, and the failure does not
+  look like a type error.** `[tool.ty.environment]` pins `python = "./.venv"`,
+  so with no local venv ty aborts on the *config* — `does not point to a Python
+  executable or a directory on disk` / `Cause: No such file or directory (os
+  error 2)` — and emits no diagnostics at all. `uv sync` first. Until the venv
+  exists, "the resolution gate is clean" is unverifiable rather than true;
+  measured 2026-09-12 on g513ie, where the checkout carried no `.venv`.
+  <!-- src: skep 9266874 | 2026-09-12 -->
 
 ## Constraints / conventions
 
@@ -656,3 +716,39 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   ANN202 on private fns) across ~10 files + 3 E501 long lines. Deferred, not
   gortex-blocking (ty is already clean); annotate to feed the native provider's
   annotation-presence half when convenient.
+
+- **The ruff gate is `src`-scoped on purpose — a bare `uvx ruff check` has never
+  been clean and is not the gate.** `[tool.ruff.lint.per-file-ignores]` exempts
+  `tests/**` from **`ANN` only**, so every other selected rule still fires
+  there: `I001` import order, `E501` long lines, `F401` unused imports, plus
+  scattered `E702` / `B011` / `E741` / `B017`. Ask `uvx ruff check src` when you
+  want the gate's answer, and don't read a red whole-repo run as a regression.
+  `src` itself is ruff-clean as of 2026-09-12 — the annotation backlog recorded
+  above was cleared, and `pyproject.toml` now carries the reasoning for the five
+  `tests/**` ty rules it ignores (tests dereference an Optional lookup without
+  narrowing; hand-written doubles can't structurally match an ANN-exempt
+  Protocol). **The way back is annotating the doubles and extracting Protocols
+  in `src`, never widening that ignore list** — `src` stays at full strictness,
+  with `error-on-warning` on so a future warning is a regression, not backlog.
+  <!-- conflicts-with: "**FOLLOW-UP:** `uvx ruff check src` still" -->
+  <!-- src: skep 9266874 | 2026-09-12 -->
+
+- **`CLAUDE.md` is a one-line pointer; `AGENTS.md` is the project-guidance
+  file.** Collapsed 2026-09-11 so the two could not drift — they had been
+  maintained as parallel copies of the same text. It is a **real file, not a
+  symlink**, so tooling that edits "the CLAUDE.md" by convention has to be
+  redirected by hand. Both stay deliberately short: read `ARCHITECTURE.md`
+  first, plus the two traps (`docs/superpowers/plans/` is history; dated specs
+  supersede each other with nothing in the directory saying so). Durable facts
+  belong here in `project.md`, not in either of them.
+  <!-- src: skep 9266874 | 2026-09-12 -->
+
+- **`ARCHITECTURE.md`'s header stamp is hand-maintained and does not update when
+  the file is edited.** Commits have amended the file without touching it, and
+  the branch it names (`metheoryt/ubuntu26-skep-A2-resume`) no longer exists —
+  that work is merged into `main`. The stamp answers "what was this last
+  rewritten against", never "is this current". For freshness compare
+  `git log --oneline -- ARCHITECTURE.md` against `git log --oneline -- src/`;
+  do not trust the header, and do not treat a branch name in it as reachable.
+  <!-- conflicts-with: "It carries a branch+commit stamp at the top; when it" -->
+  <!-- src: skep 9266874 | 2026-09-12 -->
