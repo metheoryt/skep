@@ -641,22 +641,16 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 ## Gotchas
 
-- **`--permission-prompt-tool` was REMOVED in `claude` 2.1.201.** The Phase-3
-  gated-ops brake must use a **blocking PreToolUse hook** (returns allow/deny),
-  not that flag. Verified absent from `claude --help` 2026-07-04.
-
-
-- **`claude -p … --input-format stream-json` BLOCKS on stdin until EOF.** In
-  headless one-shot mode the CLI reads its task as stream-json user messages from
-  stdin and hangs forever if stdin is an open pipe that's never written/closed.
-  Verified live 2026-07-04: with `--input-format stream-json` the process emitted
-  0 events and never exited; without it, `claude -p "<task>" --output-format
-  stream-json --verbose` streams a result and exits rc=0. **Phase 1 deliberately
-  omits `--input-format` and uses `stdin=DEVNULL`** (see `agent.py._argv` /
-  `start`). Phase 2 soft-steer must reintroduce `--input-format stream-json`
-  *and* actually write a stream-json user message to stdin + keep the pipe
-  managed — don't naively re-add the flag. (Soft-steer is now **Phase 3**, after
-  the queen/worker topology.)
+- **Both former entries here were `claude` CLI behaviour, not skep facts, and
+  moved verbatim to `~/.claude/memory/global.md` under
+  `## Harness behavior (empirical)`:** `--permission-prompt-tool` was REMOVED in
+  `claude` 2.1.201, and `claude -p … --input-format stream-json` BLOCKS on stdin
+  until EOF. skep's two consequences stay here: a Phase-3 gated-ops brake must be
+  a **blocking `PreToolUse` hook** (allow/deny), never that flag; and **Phase 1
+  deliberately omits `--input-format` and uses `stdin=DEVNULL`**
+  (`agent.py._argv` / `start`), so the Phase-3 soft-steer must reintroduce
+  `--input-format stream-json` *and* actually write a stream-json user message to
+  stdin *and* keep the pipe managed — don't naively re-add the flag.
 
 ## Constraints / conventions
 
