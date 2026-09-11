@@ -642,7 +642,7 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 ## Gotchas
 
 - **Both former entries here were `claude` CLI behaviour, not skep facts, and
-  moved verbatim to `~/.claude/memory/global.md` under
+  moved up to `~/.claude/memory/global.md` under
   `## Harness behavior (empirical)`:** `--permission-prompt-tool` was REMOVED in
   `claude` 2.1.201, and `claude -p … --input-format stream-json` BLOCKS on stdin
   until EOF. skep's two consequences stay here: a Phase-3 gated-ops brake must be
