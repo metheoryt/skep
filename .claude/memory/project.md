@@ -5,16 +5,12 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 
 ## Decisions
 
-- **Sessions A3 DONE (2026-07-24, branch `metheoryt/ubuntu26-skep-A2-resume`).**
-  Usage-limit park + auto-resume. `detect_usage_limit` (stream.py) isolates the
-  limit shape and returns `UsageLimit(reset_at)`; `run_events` emits a `parked`
-  terminal carrying `reset_at`; `Bookkeeping.parked_until` (schema v2) +
-  `park`/`parked_due`; `QueenSink.on_done` parks (keeps the mailbox — no
-  `handle_recipient_gone` — and posts "resumes ~HH:MM", default backoff 1 h +
-  0–60 s jitter when the reset is unknown); `/resume <ref> [--model]` + a `resume`
-  wire frame → `Supervisor.resume` (A1); `_park_sweep_loop` (mirrors CEO-retry)
-  auto-resumes due-parked sessions on ONLINE workers. Five things that only
-  emerged during the build and are easy to re-break:
+- **Sessions A3 — usage-limit park & auto-resume.** `ARCHITECTURE.md` §6
+  (Sessions table) and §7 own the status and the term-by-term map
+  (`parked`/`parked_until`, `detect_usage_limit` and its heuristic residual, the
+  park sweep, `origin="sweep"`, the deferred P2 multi-account pool and P3
+  per-subagent model). Five things live only here, because each is a mechanism
+  that is easy to re-break:
   (1) **Dedup lives in `Supervisor.resume`, not `cmd_resume`.** `cmd_resume`'s
   `status != 'running'` is a cheap FILTER — it never writes status, and `running`
   is only set when the worker's `task_started` round-trips into
@@ -23,30 +19,26 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   released in both `resume`'s failure branch and `run_events`' `finally`; a
   duplicate raises `ValueError`. The spec asserted the opposite and was corrected
   (§5/§6).
-  (2) **The sweep runs in BOTH shapes:** split-queen installs it on
-  `app.cleanup_ctx` in `build_queen`; single-process `skep.app:main` runs it as a
-  bare task. `build_worker_and_router` also had to call `router.mark_online(...)`
-  — without it the in-process worker read as detached forever and the sweep (which
-  skips offline workers) auto-resumed nothing.
-  (3) **The two shapes reject differently.** `RemoteWorker.resume` is
-  fire-and-forget (returns 0, never raises) so rejections come back later as a
-  `spawn_rejected` frame; single-process raises `CapacityError`/`ValueError`
-  synchronously into the sweep's own `except`. Both are load-bearing.
-  (4) **`origin` on the resume frame** (echoed into `spawn_rejected`, alongside
-  `action` so the verb matches) makes `QueenSink.on_spawn_rejected` LOG instead of
-  post when `origin == "sweep"` — otherwise a full worker produced one owner
-  Telegram message every sweep tick (30 s) forever. A human's `/resume` still
-  notifies, because it answers optimistically and the failure arrives async.
-  (5) **`Supervisor.resume` seeds the new row with `resume_token=prev.resume_token`**
-  — `latest_invocation` is `ORDER BY id DESC LIMIT 1`, so a tokenless newest row
-  made every later resume fail permanently.
-  **Deferred:** P2 multi-account pool (gated on the credential-injection spike —
-  the Orca-spawned claude carries no credential env var, mechanism unconfirmed/
-  possibly racy) and P3 per-subagent model. **Residuals:** detection is a text
-  heuristic until a real usage-limit event is captured (design §8.1); and
-  sweep-origin suppression is TOTAL — a permanently-failing parked entry retries
-  every tick forever at INFO with no give-up counter, and the exception type is not
-  a usable discriminator ("already has a live invocation" is benign).
+  (2) **`build_worker_and_router` must call `router.mark_online(...)`.** Without
+  it the in-process worker read as detached forever and the sweep — which skips
+  offline workers — auto-resumed nothing.
+  (3) **The two shapes reject differently, and both are load-bearing.**
+  `RemoteWorker.resume` is fire-and-forget (returns 0, never raises), so
+  rejections come back later as a `spawn_rejected` frame; single-process raises
+  `CapacityError`/`ValueError` synchronously into the sweep's own `except`.
+  (4) **`origin` rides the resume frame and is echoed into `spawn_rejected`**
+  (alongside `action`, so the verb matches). Without it a full worker produced one
+  owner Telegram message every sweep tick — 30 s apart, forever. A human's
+  `/resume` still notifies, because it answers optimistically and the failure
+  arrives async.
+  (5) **`Supervisor.resume` seeds the new row with
+  `resume_token=prev.resume_token`** — `latest_invocation` is
+  `ORDER BY id DESC LIMIT 1`, so a tokenless newest row made every later resume
+  fail permanently.
+  **Residual:** sweep-origin suppression is TOTAL — a permanently-failing parked
+  entry retries every tick forever at INFO with no give-up counter, and the
+  exception type is not a usable discriminator ("already has a live invocation"
+  is benign).
 
 - **L0.2 Increment 1 DONE (2026-07-16, branch `feat/skep-l0.2-increment1`,
   re-planned against current main after the abandoned
@@ -194,130 +186,82 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   entrypoints + mutual auth + mDNS + heartbeat/presence + queen auto-onboarding +
   deploy — NOT yet written).
 
-- **Phase 2 Plan 1 EXECUTED 2026-07-05** (branch `skep-phase2`, formerly
-  `gortex-align`; local-only repo, no remote). All 9 TDD tasks landed: `Config`
-  split into `WorkerConfig`/`QueenConfig`; `transport.py` seam
-  (`EventSink`/`CommandHandler`/`QueenInbox` + `InMemoryEventSink`); formatting
-  descriptors now emit PLAIN text (escaping moved to the queen); agent
-  `CLAUDE_CONFIG_DIR` injection; `Supervisor` emits domain events + `max_concurrent`
-  cap; `queen/` package (`bookkeeping.py` ref-mapping SQLite, `telegram_sink.py`
-  QueenSink, `router.py` QueenRouter); interim single-process `app.py` wiring queen
-  +worker over the in-memory transport (`build_worker_and_router`, `parse_spawn`,
-  owner-gated `/spawn`/`/ls`/`/kill`/`/panic`). 69 tests pass. **Plan 2 WRITTEN
-  2026-07-05** (`plans/2026-07-05-skep-phase2-plan2-websocket-transport.md`, 12
-  TDD tasks: config net/auth fields → `wire.py` codec → `auth.py` HMAC handshake →
-  queen WS server + `RemoteWorker` + `on_spawn_rejected` → worker WS client +
-  `WsEventSink` + `SwitchableEventSink` → heartbeat/presence/detached-`/ls` →
-  reconnect/backoff + idempotent topic re-attach → `discovery.py` mDNS →
-  `skep-queen` entrypoint → `skepd` entrypoint → queen group auto-onboarding →
-  two-worker WS e2e + auth-reject). Deps added: `aiohttp`, `zeroconf`. **Deviation
-  from design §15:** `telegram_gw.py`/`formatting.py` stay at `src/skep/` (NOT moved
-  into `queen/`) to dodge gotcha (b) below. Containerized-queen/Caddy VPS wiring is
-  explicitly OUT of scope (lives in `~/gh/vps`).
-  **Plan 2 EXECUTED 2026-07-05** (subagent-driven, all 12 TDD tasks; merged to `main`
-  at merge commit `78f872e`, feature branch `feat/skep-phase2-plan2` deleted; 117
-  tests pass `-m "not mdns"` + mDNS round-trip 4/4 local, `uvx pyright src` clean).
-  New modules: `wire.py`, `auth.py`, `ws_transport.py`, `discovery.py`, `queen/app.py`,
-  `worker/app.py`, `queen/onboarding.py`. AUTH IS NOW 4 FRAMES (challenge/auth/auth_ok/
-  auth_error) — `handshake_server` sends `auth_error` before rejecting so a peer parked
-  on recv() under gather doesn't deadlock. Whole-branch (opus) review caught+fixed 3
-  cross-task bugs per-task reviews missed: reconnect-clobber race (→ `QueenRouter.
-  detach_if_current` compare-and-clear), empty `shared_secret` failed OPEN (→ both
-  `serve()` fail-closed with SystemExit on empty/whitespace secret), and an unguarded
-  re-attach replay loop (→ per-item try/except). DEFERRED follow-ups (not blocking,
-  logged): wedged-worker liveness eviction (§6.4 K-overdue sweeper — only transport
-  ping/pong exists today); `wire.LS_REPLY`/`LS_REQUEST` are unused (no live `/ls` query
-  path — `/ls` reads bookkeeping); minor test-hygiene nits.
-  **L0 MCP-shim spike RESOLVED 2026-07-05** — doc
-  `docs/superpowers/specs/2026-07-05-l0-mcp-shim-spike.md`. Decisions (verified vs
-  `claude` 2.1.201): shim = **in-worker-process streamable-HTTP MCP server** on
-  `127.0.0.1` (NOT stdio — stdio would be an agent-child with no handle to the seam),
-  **one server per worker** multiplexed by a **per-agent bearer token** (token→tid
-  map; enforces §11 spoof-proof `from`), injected via `--mcp-config '<inline JSON>'`
-  at spawn WITHOUT `--strict-mcp-config` (agent keeps profile MCP e.g. gortex). Bind
-  to **worker-local `tid`** (sync at spawn), NOT queen `ref` (async/fire-and-forget);
-  queen resolves `from`→ref via existing bookkeeping. THE REAL NEW MACHINERY: the seam
-  is fire-and-forget both ways but mailbox tools are **request/reply** → add a `req_id`
-  + `dict[req_id,Future]` correlation layer on the WS (new frames `mailbox_send`/
-  `mailbox_ack`/`inbox_read`/`inbox_reply`); persist-before-ack; **L1 memory reuses
-  this exact layer**. Link-down → shim returns retryable error (never hangs). fake_claude
-  CAN'T call MCP → real tool round-trip is integration/manual; unit-test shim handlers +
-  seam req/reply directly. Defaults: 20/min, depth 10, dedupe 60s, body 16KB, pure-pull
-  inbox.
-  **L0 MAILBOX BUILT + MERGED to main 2026-07-05 (merge `92f0c3a`, branch
-  `feat/skep-l0-mailbox`, 26 commits).** Plan `docs/superpowers/plans/2026-07-05-l0-mailbox.md`
-  (13 TDD tasks, subagent-driven w/ per-task + whole-branch review). Shipped:
-  `queen/mailbox.py` (Mailbox store + MailboxService policy pipeline),
-  `queen/addressing.py` (ceo/mgr:<name>/<ref>, fail-closed to active IC only),
-  `worker/mcp_shim.py` (per-agent FastMCP streamable-HTTP, owns uvicorn lifecycle),
-  `WsMailboxClient` req/reply layer in `ws_transport.py`, config knobs, CEO
-  outbound (MarkdownV2-escaped) + inbound reply. Reconciled from the spike:
-  **one FastMCP app PER AGENT on an ephemeral port with `tid` closed over**
-  (not one-server-per-worker+token — token unused, `mcp_token=None`); identity
-  still spoof-proof (closure + server-side `agent_sender`). 202 tests pass (+1
-  opt-in real-claude integration `SKEP_RUN_INTEGRATION=1`), pyright-clean.
-  Reviews caught+fixed real bugs: read_inbox archive race, depth-cap bypass via
-  unresolvable in_reply_to, shim socket-leak on stop + failed-start, supervisor
-  spawn failure-path leak, MarkdownV2 TelegramBadRequest (bot default parse mode),
-  reply-id injection misrouting, and the whole-branch BLOCKER (worker assembly
-  never wired the mailbox — feature was inert).
-  **L0.1 HARDENING DONE 2026-07-05 (branch `feat/skep-l0.1-hardening`, 3
-  commits `8021c0c`/`5499247`/`01e712b`; 214 tests, src pyright-clean; adversarial
-  review ran + fixed):** (1) DONE at-least-once CEO delivery — acceptance
-  decoupled from Telegram push; `Mailbox.pending()` non-destructive peek;
-  `MailboxService.redeliver_ceo()` drains pending CEO mail in order, marks read
-  only after a successful push, under an `asyncio.Lock` (no double-push); periodic
-  `_ceo_retry_loop` (SKEP_MAILBOX_CEO_RETRY_INTERVAL, 30s) tied to the aiohttp app
-  lifecycle. Review caught a CRITICAL regression: a body >4096 chars (within the
-  16384-byte cap) is a permanent Telegram 400 → drain-all-stop-at-first wedged the
-  whole CEO queue forever → fixed with `PermanentDeliveryError` (deliver_ceo maps
-  TelegramBadRequest→permanent; redeliver dead-letters+alerts+skips permanent,
-  only retries transient). `_safe_alert` stops a failed alert crashing the
-  pipeline. (2) DONE per-agent shim bearer token — `secrets.token_urlsafe(32)`
-  per spawn; `_require_bearer` ASGI middleware (constant-time, 401, non-http
-  passthrough); token never logged/persisted. CAVEAT: token rides the agent's
-  argv (`--mcp-config`), so a SAME-UID sibling can read it from /proc/cmdline —
-  relocating off-argv is same-UID-defeatable too (env/file also same-UID-readable)
-  and inline `--mcp-config` `${VAR}` expansion is unconfirmed, so NOT done; it's
-  defense-in-depth vs passive port-scan, fully effective only under UID isolation.
-  **NEW L0.2 FOLLOW-UP: per-agent UID/sandbox isolation** (the real fix for
-  co-located spoofing; deliver the shim token off-argv at the same time).
-  **L0.1 CLOSE-OUT DONE 2026-07-05 (branch `feat/skep-l0.1-closeout`, 3 TDD
-  commits; 217 tests pass `-m "not mdns"`, `uvx pyright src` 0 errors, ruff
-  clean):** the three still-open L0.1 items are fixed. (5) `MailboxShim.stop()`
-  now `except (Exception, SystemExit)` — deliberately NOT bare `BaseException`,
-  so uvicorn's bind-collision SystemExit is swallowed but `CancelledError` still
-  propagates. (3) recipient-gone TOCTOU: `handle_send` re-checks IC recipient
-  liveness (`resolve_address`) right after `insert` and dead-letters if the
-  agent went terminal — DEFENSE-IN-DEPTH, not a live bug (verified: the WS
-  `_dispatch_mailbox_send` awaits `handle_send` inline on the queen event loop
-  and `handle_send` runs resolve→insert with ZERO awaits between, so `on_done`→
-  `handle_recipient_gone` can't interleave today; the guard closes the window if
-  an await is ever added there). (4) single-process path had an inert mailbox
-  (switch built, target never set → `MailboxUnavailable`): extracted the queen's
-  MailboxService assembly into **`src/skep/queen/assembly.py`**
-  (`build_mailbox_service` + `make_ceo_callbacks`/`_ceo_retry_loop`/
-  `_install_ceo_retry`/`_mailbox_db_path`), shared by BOTH `build_queen` and the
-  single-process `app.main`; `build_worker_and_router` takes an optional
-  `mailbox_service` and points the switch at an `InMemoryMailboxClient`; `main`
-  threads it through QueenSink/build_dispatcher and runs the CEO-retry sweeper as
-  a background task (no aiohttp app on the polling path). `assembly.py` NEVER
-  imports `skep.app` → no import cycle (`queen.app` still imports `build_dispatcher`
-  from `skep.app`); the CEO helpers are re-exported from `skep.queen.app` for
-  existing import sites. `main()` glue itself is untested (blocks on
-  `start_polling`) — verified at the `build_worker_and_router` assembly seam, not
-  end-to-end. Minor recorded asymmetry: `InMemoryMailboxClient.send` lets
-  `agent_sender`'s `ValueError` (unknown tid) propagate, whereas the WS path
-  returns a clean rejected ack — unreachable in practice (bk row exists by spawn
-  time) and pre-existing to L0.1 #4.
-  **Next step: L1 memory (reuses the req/reply layer), or L0.2 UID isolation.**
-  Two execution gotchas from Plan 2 (kept for reference): (a) the plan
-  predated this repo's pyright governance, so plan-faithful rewrites regressed
-  `src` type-cleanliness — keep `src` pyright-clean (0 errors; `uvx pyright src`),
-  mirror the `_task()` assert-helper + `Callable[...]` factory annotations idiom;
-  (b) the `Config`→`QueenConfig` split forced migrating `telegram_gw.py` (a coupling
-  the gortex-annotation commit had introduced) — watch for similar type-annotation
-  couplings when Plan 2 moves modules to the queen.
+- **Phase 2 (queen/worker split + WS transport) and L0/L0.1 (mailbox +
+  hardening) are SHIPPED and merged.** For *what is built and what is not*, read
+  `ARCHITECTURE.md` §7 — it owns the Phase 1–4 / L0–L5 status tables and is
+  overwritten in place. What follows is only the set of decisions and incidents
+  that section does not carry. Structurally: `transport.py` is the seam
+  (`EventSink`/`CommandHandler`/`QueenInbox` + `InMemoryEventSink`), with
+  `wire.py`, `auth.py`, `ws_transport.py`, `discovery.py`, `queen/app.py`,
+  `worker/app.py`, `queen/onboarding.py` on top; formatting descriptors emit
+  PLAIN text and escaping happens on the queen. **`telegram_gw.py` /
+  `formatting.py` deliberately stayed at `src/skep/` instead of moving into
+  `queen/`** — the `Config`→`QueenConfig` split had coupled them through
+  type annotations, and moving them dragged that coupling along. Watch for
+  similar annotation couplings before relocating a module.
+
+- **Four WS-transport rules, each of which cost a real bug:**
+  - **Auth is FOUR frames** (`challenge`/`auth`/`auth_ok`/`auth_error`).
+    `handshake_server` sends `auth_error` *before* rejecting, so a peer parked on
+    `recv()` under `gather` does not deadlock.
+  - **An empty or whitespace `shared_secret` must fail CLOSED** — both `serve()`
+    paths raise `SystemExit`. It used to fail open.
+  - **Reconnect-clobber race → `QueenRouter.detach_if_current`**, a
+    compare-and-clear: a late disconnect from a superseded connection must not
+    clear the live one.
+  - **Idempotent topic re-attach needs per-item `try`/`except`** — one bad item
+    otherwise turns the replay into an unguarded loop.
+  All three of the first bugs were caught by a **whole-branch (opus) review that
+  per-task reviews missed**; run one before merging a multi-task branch.
+
+- **The L0 MCP shim is one FastMCP streamable-HTTP app PER AGENT**, on an
+  ephemeral `127.0.0.1` port, with the worker-local `tid` **closed over** (not
+  one server per worker keyed by token). Identity is therefore spoof-proof by
+  construction (closure + server-side `agent_sender`), which is why the spike's
+  token→tid map was dropped. Bind to the worker-local `tid`, synchronously at
+  spawn — NOT the queen's `ref`, which is assigned async/fire-and-forget; the
+  queen resolves `from`→`ref` through bookkeeping. Injected via `--mcp-config`
+  **without** `--strict-mcp-config`, so the agent keeps its profile MCP servers
+  (e.g. gortex). The seam is fire-and-forget both ways but mailbox tools are
+  request/reply, so there is a `req_id` + `dict[req_id, Future]` correlation
+  layer on the WS (`mailbox_send`/`mailbox_ack`/`inbox_read`/`inbox_reply`),
+  persist-before-ack, link-down returns a retryable error and never hangs.
+  **L1 memory reuses that exact layer.** Mailbox policy defaults: 20/min, depth
+  10, dedupe 60 s, body 16 KB, pure-pull inbox. `fake_claude` cannot call MCP, so
+  a real tool round-trip is integration/manual — unit-test the shim handlers and
+  the seam's req/reply directly.
+
+- **Four mailbox-delivery rules that are load-bearing:**
+  - **A body over 4096 chars is a PERMANENT Telegram 400, and it is inside the
+    16384-byte cap** — so a drain-all-stop-at-first loop wedged the whole CEO
+    queue forever. `deliver_ceo` maps `TelegramBadRequest` →
+    `PermanentDeliveryError`; redelivery dead-letters + alerts + skips permanent
+    failures and retries only transient ones. `_safe_alert` keeps a failed alert
+    from crashing the pipeline. CEO delivery is at-least-once and decoupled from
+    the Telegram push: `Mailbox.pending()` is a non-destructive peek,
+    `redeliver_ceo()` marks read only after a successful push, under an
+    `asyncio.Lock`.
+  - **`MailboxShim.stop()` catches `(Exception, SystemExit)`, deliberately NOT
+    bare `BaseException`** — uvicorn's bind-collision `SystemExit` is swallowed
+    while `CancelledError` still propagates.
+  - **The recipient-gone re-check in `handle_send` is defence-in-depth, not a
+    live bug.** Verified: the WS `_dispatch_mailbox_send` awaits `handle_send`
+    inline on the queen loop and `handle_send` runs resolve→insert with ZERO
+    awaits between, so `on_done`→`handle_recipient_gone` cannot interleave today.
+    The guard closes the window the moment an `await` is added there.
+  - **`src/skep/queen/assembly.py` must NEVER import `skep.app`** — it is the
+    shared MailboxService assembly (`build_mailbox_service`, the CEO retry
+    helpers, `_mailbox_db_path`) used by BOTH `build_queen` and the
+    single-process `app.main`, and `queen.app` still imports `build_dispatcher`
+    from `skep.app`. Importing back creates a cycle. Before this existed the
+    single-process path had an inert mailbox (switch built, target never set →
+    `MailboxUnavailable`) — a whole feature silently unwired, which is also what
+    the whole-branch review caught in L0 itself.
+
+- **Keep `src` pyright-clean (0 errors, `uvx pyright src`).** Plan-faithful
+  rewrites regressed it once because the plan predated this repo's pyright
+  governance; mirror the `_task()` assert-helper and the `Callable[...]` factory
+  annotation idiom rather than reintroducing `Any`.
 
 - **Agent-comms prior-art survey (deep-research, 2026-07-05): confirms the
   worker↔queen TRANSPORT is a BUILD, and surfaces shared vector memory as the
@@ -509,11 +453,17 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   `store_memory` takes a repo override. The spec deliberately depends on the **CLI**
   (workers are native → `gortex` on PATH → agent reaches it via Bash). Verify
   separately before ever relying on MCP.
-  **DOCUMENTED ASSUMPTION (load-bearing):** gortex has **no per-profile scope** (one
-  daemon per user per machine). Profile isolation holds ONLY because personal
-  (`~/.claude`) and work (`~/.claude-work`) live on separate WSL distros with separate
-  daemons + tracked-repo sets. Co-locating both profiles on one host silently leaks a
-  work repo's operational notes to a personal agent — revisit BEFORE that happens.
+  **DOCUMENTED ASSUMPTION, NOW BROKEN (re-checked 2026-09-11):** gortex has **no
+  per-profile scope** (one daemon per user per machine). Profile isolation used to
+  hold because personal (`~/.claude`) and work (`~/.claude-work`) lived on separate
+  WSL distros with separate daemons + tracked-repo sets. **That premise is gone:**
+  the fleet ships exactly one committed profile (`settings.json` → `~/.claude`; the
+  `~/.claude-pure` work profile was folded back in `machines` commit `d48c09a`), and
+  on g513ie only `~/.claude` exists — work and personal repos are already co-located
+  under one daemon. So the leak this paragraph said to revisit BEFORE it happened
+  has happened: a personal agent can recall a work repo's operational notes. Decide
+  whether skep must scope memory itself, or whether the repo-path `--index` argument
+  is enough of a boundary.
   **DEFERRED, not discarded:** the 2026-07-05 queen-hosted central store remains the
   end state (L2's persistent managers need queen-persisted durable identity); its
   complexity buys cross-machine sharing, which this fleet doesn't need yet. Trigger to
@@ -679,15 +629,23 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   soft-steer, gated-ops approval → Phase 3; sandbox, resume-after-restart,
   worktree cleanup → Phase 4. **Shared vector memory (queen-hosted blackboard) →
   its own later phase, after P2/P3** (decided 2026-07-05; see Decisions).
-- **Profile↔repo binding (owner-confirmed 2026-07-05): the work profile
-  (`~/.claude-work`) operates ONLY on work-related repos; personal (`~/.claude`) on
-  personal repos.** A task's repo dictates its eligible profile — profiles are NOT
-  interchangeable labor pools. Plan usage limits are INDEPENDENT per profile
-  (separate OAuth accounts), but you generally CANNOT dodge a rate-limited profile
-  by rerouting its work, because the eligible profile is fixed by the repo:
-  work-repo + work-profile-exhausted ⇒ PARK (no personal fallback). The L4
-  "route around the exhausted division" idea only applies if a task is ever
-  profile-agnostic or a class ever has >1 account — not the case today.
+- **Profile↔repo binding (owner-confirmed 2026-07-05): the work profile operates
+  ONLY on work-related repos; personal (`~/.claude`) on personal repos.** A task's
+  repo dictates its eligible profile — profiles are NOT interchangeable labor
+  pools. Plan usage limits are INDEPENDENT per profile (separate OAuth accounts),
+  but you generally CANNOT dodge a rate-limited profile by rerouting its work,
+  because the eligible profile is fixed by the repo: work-repo +
+  work-profile-exhausted ⇒ PARK (no personal fallback). The L4 "route around the
+  exhausted division" idea only applies if a task is ever profile-agnostic or a
+  class ever has >1 account — not the case today. **The dir name in this rule is
+  stale and there is currently no second profile to bind to** (checked
+  2026-09-11): the committed `settings.<postfix>.json` set IS the profile
+  registry and only `settings.json` → `~/.claude` is committed, so nothing
+  provisions a `~/.claude-work`; the `pure` / `~/.claude-pure` profile was folded
+  back into `settings.json` in `machines` commit `d48c09a`, and g513ie carries
+  only `~/.claude`. Work-account separation is Orca's account switcher now, not a
+  config dir — so read this as a rule about *accounts*, and re-derive the
+  mechanism before building routing on it.
 - **Type view = ty + ruff (adopted 2026-07-09, per the reworked `gortex-align`
   skill).** `[tool.ty]` + `[tool.ruff]` in `pyproject.toml`; standalone
   `pyrightconfig.json` removed. `uvx ty check src` is the resolution gate (clean);
