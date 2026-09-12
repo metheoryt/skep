@@ -23,3 +23,20 @@ its own config, is a repo-onboarding fact and was written to skep's own
 ## personality
 
 (none)
+
+---
+
+# /cyphy:memory-review decision — 2026-09-12 (applied on g15)
+
+Both rows decided. 1 applied, 1 rejected as already recorded.
+
+APPLIED -> ~/.claude/memory/global.md (1): a bare `gortex init` commits agent-visible
+artifacts — generated SKILL.md blurbs and a `## Community Skills` table injected into
+CLAUDE.md/AGENTS.md — and the cost is context staleness, not graph size.
+
+REJECTED, already recorded (1): "`gortex daemon reload`/`restart` do not purge nodes for
+a newly excluded path; only untrack + track does". global.md already carries this under
+`## Gortex` as "**Excludes are not retroactive; `daemon reload` never purges.**", with
+MORE detail than the proposal — it also records that `untrack` deletes the whole repos[]
+entry including its exclude list, and the measured backend-api node/file split. Nothing
+to add.
