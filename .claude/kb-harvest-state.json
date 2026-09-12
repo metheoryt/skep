@@ -1,10 +1,9 @@
 {
   "last_refresh": {
-    "commit": "9266874",
+    "commit": "e8c4f7063f69d38af3a86a7611aa509ff3b038ed",
     "date": "2026-09-12",
-    "tiers_touched": [
-      "project"
-    ],
-    "sessions_processed": []
-  }
+    "sessions_processed": [],
+    "tiers_touched": []
+  },
+  "sessions": {}
 }
