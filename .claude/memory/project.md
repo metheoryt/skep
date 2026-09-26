@@ -88,8 +88,10 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   script `skep`, env prefix `SKEP_`. Plan-2 binary names: worker daemon `skepd`,
   queen `skep-queen` (was `fleetd`/`fleetqueen`). Deploy domain `skep.cyphy.kz`
   (was `fleet.cyphy.kz`). Upstream: `git@github.com:metheoryt/skep.git`. The
-  gortex auto-generated skills table (`CLAUDE.md`/`AGENTS.md`/`.claude/skills/
-  generated/`) still says "fleetd" — machine-managed, regenerates on reindex.
+  gortex auto-generated skills table that still said "fleetd" is **gone from
+  `CLAUDE.md` and `AGENTS.md` (2026-07-25)** and `.claude/skills/generated/` is
+  gitignored, so no pre-rename token reaches an agent session any more; see the
+  deleted-skills bullet below.
   NOTE: the English noun "fleet" (a fleet of agents) intentionally survives in
   prose; only the `fleetd`/`fleetqueen`/`FLEETD_` tokens were renamed.
 
@@ -619,8 +621,6 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   multi-account pool is now designed as the credential pool (§2.6), and the
   queen-hosted shared-memory phase is now split into L1.2 skills + L1.3 fleet
   memory (§2.1/§2.2).
-  <!-- conflicts-with: "the deferred P2 multi-account pool and P3" -->
-  <!-- conflicts-with: "**Shared vector memory (queen-hosted blackboard) → its own later phase, after P2/P3**" -->
   <!-- src: skep 9266874 | 2026-09-12 -->
 
 - **The 20 committed `gortex-*` generated skills were deleted and the directory
@@ -637,7 +637,6 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   repo's indexed markdown, and they were competing with `ARCHITECTURE.md` for
   graph attention. `docs/superpowers/specs/` stays indexed on purpose — it is
   where *why* lives.
-  <!-- conflicts-with: "still says \"fleetd\" — machine-managed, regenerates on reindex." -->
   <!-- src: skep 9266874 | 2026-09-12 -->
 
 ## Gotchas
@@ -687,8 +686,12 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
 - Phase 1 is `native` mode only, single process. Phase 2 = queen/workers (see
   `2026-07-04-skep-phase2-queen-workers-design.md`). `ask_human` MCP,
   soft-steer, gated-ops approval → Phase 3; sandbox, resume-after-restart,
-  worktree cleanup → Phase 4. **Shared vector memory (queen-hosted blackboard) →
-  its own later phase, after P2/P3** (decided 2026-07-05; see Decisions).
+  worktree cleanup → Phase 4. **The queen-hosted shared-memory phase no longer
+  exists as one later phase** — the 2026-07-26 Postgres/Hermes/Nostr design
+  splits it into L1.2 skills as procedural memory (§2.1) and L1.3 fleet memory
+  as declarative memory (§2.2), both in the build order after Postgres and cron.
+  The 2026-07-05 "own later phase, after P2/P3" decision is superseded; see
+  Decisions.
 - **Profile↔repo binding (owner-confirmed 2026-07-05): the work profile operates
   ONLY on work-related repos; personal (`~/.claude`) on personal repos.** A task's
   repo dictates its eligible profile — profiles are NOT interchangeable labor
@@ -711,11 +714,11 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   `pyrightconfig.json` removed. `uvx ty check src` is the resolution gate (clean);
   `uvx ruff check` (with `ANN`) is the annotation-presence gate. ty is pre-1.0
   (v0.0.x) — its config keys/rule names can churn; re-verify against
-  `uvx ty check --help` if a key errors. **FOLLOW-UP:** `uvx ruff check src` still
-  has 21 findings — 18 missing return-type annotations (ANN204 on `__init__`/dunder,
-  ANN202 on private fns) across ~10 files + 3 E501 long lines. Deferred, not
-  gortex-blocking (ty is already clean); annotate to feed the native provider's
-  annotation-presence half when convenient.
+  `uvx ty check --help` if a key errors. The 21-finding backlog once recorded
+  here — 18 missing return-type annotations (ANN204 on `__init__`/dunder, ANN202
+  on private fns) across ~10 files, plus 3 E501 long lines — was **cleared on
+  2026-09-12**; `src` is ruff-clean, and the bullet below carries what the gate
+  is scoped to and why widening it is the wrong way back.
 
 - **The ruff gate is `src`-scoped on purpose — a bare `uvx ruff check` has never
   been clean and is not the gate.** `[tool.ruff.lint.per-file-ignores]` exempts
@@ -723,14 +726,13 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   there: `I001` import order, `E501` long lines, `F401` unused imports, plus
   scattered `E702` / `B011` / `E741` / `B017`. Ask `uvx ruff check src` when you
   want the gate's answer, and don't read a red whole-repo run as a regression.
-  `src` itself is ruff-clean as of 2026-09-12 — the annotation backlog recorded
-  above was cleared, and `pyproject.toml` now carries the reasoning for the five
+  `src` itself is ruff-clean as of 2026-09-12 — the 21-finding ANN204/ANN202 +
+  3×E501 backlog was cleared, and `pyproject.toml` now carries the reasoning for the five
   `tests/**` ty rules it ignores (tests dereference an Optional lookup without
   narrowing; hand-written doubles can't structurally match an ANN-exempt
   Protocol). **The way back is annotating the doubles and extracting Protocols
   in `src`, never widening that ignore list** — `src` stays at full strictness,
   with `error-on-warning` on so a future warning is a regression, not backlog.
-  <!-- conflicts-with: "**FOLLOW-UP:** `uvx ruff check src` still" -->
   <!-- src: skep 9266874 | 2026-09-12 -->
 
 - **`CLAUDE.md` is a one-line pointer; `AGENTS.md` is the project-guidance
@@ -750,5 +752,4 @@ only (decisions, gotchas, constraints). One bullet per fact. No secrets. -->
   rewritten against", never "is this current". For freshness compare
   `git log --oneline -- ARCHITECTURE.md` against `git log --oneline -- src/`;
   do not trust the header, and do not treat a branch name in it as reachable.
-  <!-- conflicts-with: "It carries a branch+commit stamp at the top; when it" -->
   <!-- src: skep 9266874 | 2026-09-12 -->
